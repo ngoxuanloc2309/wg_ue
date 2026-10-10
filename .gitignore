@@ -1,0 +1,13 @@
+build/
+build-t01/
+.settings/
+.agents/
+.vscode/
+.cache/
+.claude/
+
+# Local/editor and generated documentation artifacts
+*.user
+*.suo
+*.swp
+~$*.docx

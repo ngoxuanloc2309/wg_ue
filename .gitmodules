@@ -1,0 +1,21 @@
+[submodule "libs/littlefs"]
+	path = libs/littlefs
+	url = https://github.com/littlefs-project/littlefs.git
+[submodule "libs/cJSON"]
+	path = libs/cJSON
+	url = https://github.com/DaveGamble/cJSON.git
+[submodule "libs/mbedtls"]
+	path = libs/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "libs/tinyusb"]
+	path = libs/tinyusb
+	url = https://github.com/hathach/tinyusb.git
+[submodule "libs/stm32-dp83848"]
+	path = libs/stm32-dp83848
+	url = https://github.com/STMicroelectronics/stm32-dp83848.git
+[submodule "libs/logger"]
+	path = libs/logger
+	url = https://github.com/SynaptiXCompany/logger.git
+[submodule "libs/x-cube-st67w61"]
+	path = libs/x-cube-st67w61
+	url = https://github.com/STMicroelectronics/x-cube-st67w61.git

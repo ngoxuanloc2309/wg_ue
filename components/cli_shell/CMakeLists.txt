@@ -1,0 +1,3 @@
+add_library(components_cli_shell STATIC cli_shell.c)
+target_include_directories(components_cli_shell PUBLIC .)
+target_link_libraries(components_cli_shell PUBLIC stm32cubemx)

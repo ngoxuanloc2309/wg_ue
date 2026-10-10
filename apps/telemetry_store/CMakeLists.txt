@@ -1,0 +1,3 @@
+add_library(apps_telemetry_store STATIC telemetry_store.c telemetry_store_test.c)
+target_include_directories(apps_telemetry_store PUBLIC .)
+target_link_libraries(apps_telemetry_store PUBLIC stm32cubemx)

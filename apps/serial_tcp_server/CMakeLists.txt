@@ -1,0 +1,4 @@
+add_library(apps_serial_tcp_server STATIC)
+target_sources(apps_serial_tcp_server PRIVATE serial_tcp_server.c)
+target_include_directories(apps_serial_tcp_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(apps_serial_tcp_server PUBLIC stm32cubemx drivers_uart apps_modbus_master)
