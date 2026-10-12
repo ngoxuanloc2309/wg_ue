@@ -26,6 +26,7 @@
 #include "app_config.h"
 #include "wifi_driver.h"
 #include "mqtt_client.h"
+#include "splc_port.h"
 
 static gateway_state_t g_state = GW_STATE_INIT;
 static SemaphoreHandle_t serial_tx_mutex;
@@ -230,6 +231,7 @@ void gateway_app_start(void) {
     /* 5. RS485 and Modbus init */
     rs485_port_init();
     modbus_master_init();
+    (void)splc_host_start();
     
     /* Initialize Modbus TCP Server */
     modbus_tcp_server_init();
