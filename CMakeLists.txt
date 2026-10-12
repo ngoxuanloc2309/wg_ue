@@ -164,6 +164,7 @@ add_subdirectory(middleware/mongoose)
 add_subdirectory(libs)
 # Ports
 add_subdirectory(ports/modbus_port)
+add_subdirectory(ports/splc_port)
 add_subdirectory(ports/lwip_port)
 add_subdirectory(ports/littlefs_port)
 add_subdirectory(ports/mongoose_port)
@@ -223,6 +224,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     bsp
     # Ports
     ports_modbus_port
+    ports_splc_port
     ports_lwip_port
     ports_littlefs_port
     ports_mongoose_port
