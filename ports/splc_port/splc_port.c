@@ -19,14 +19,20 @@
 #include "board_ethernet_wifi_gateway.h"
 #include "splc_log.h"
 
+#if GW_USB_CDC_ENABLE
+#include "gw_usb_cdc.h"
+#endif
+
 static const char *TAG = "SPLC_PORT";
 
 /* The CDC-ACM is the only CDC class instance of the host's descriptor
- * (ports/usb_port/Target/usb_descriptors.c); the network function is RNDIS /
- * ECM / NCM, not a CDC class instance. */
+ * (ports/usb_port/Target/usb_descriptors.c, or usb_descriptors_cdc.c with
+ * GW_USB_CDC_ENABLE); the network function is RNDIS / ECM / NCM, not a CDC
+ * class instance. */
 #define SPLC_CDC_ITF            0
 
-/* Set by usb_netif_task after tusb_init() succeeded (Core/Src/usb.c).
+/* Set by usb_netif_task (or gw_usb_cdc_task) after tusb_init() succeeded
+ * (Core/Src/usb.c).
  * Until then no tud_*() call is allowed. */
 extern volatile uint8_t g_usb_tusb_initialized;
 
@@ -262,6 +268,15 @@ bool splc_host_start(void)
         log_error(TAG, "App link registration failed");
         return false;
     }
+
+#if GW_USB_CDC_ENABLE
+    /* CDC-only build: this port is the USB owner, so bring USB up here. */
+    if (!gw_usb_cdc_start()) {
+        log_error(TAG, "USB CDC start failed");
+        splc_link_unregister();
+        return false;
+    }
+#endif
 
     if (xTaskCreate(splc_task, "SPLC", (configSTACK_DEPTH_TYPE)SPLC_HOST_TASK_STACK_WORDS,
                     NULL, SPLC_HOST_TASK_PRIO, NULL) != pdPASS) {

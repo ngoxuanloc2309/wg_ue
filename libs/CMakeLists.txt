@@ -38,8 +38,17 @@ add_subdirectory(tinyusb/src)
 add_library(tinyusb STATIC)
 tinyusb_target_add(tinyusb)
 file(GLOB USB_NET_LIB_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/lib/networking/*.c)
+if(GW_USB_CDC_ENABLE)
+    # CDC-only device: one configuration with one ACM, no network class.
+    set(GW_USB_DESCRIPTOR_SOURCE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ports/usb_port/Target/usb_descriptors_cdc.c)
+    set(USB_NET_LIB_SOURCE "")
+else()
+    set(GW_USB_DESCRIPTOR_SOURCE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ports/usb_port/Target/usb_descriptors.c)
+endif()
 target_sources(tinyusb PUBLIC 
-        ${CMAKE_CURRENT_SOURCE_DIR}/../ports/usb_port/Target/usb_descriptors.c
+        ${GW_USB_DESCRIPTOR_SOURCE}
         ${USB_NET_LIB_SOURCE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/portable/st/stm32_fsdev/dcd_stm32_fsdev.c
         ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/portable/st/stm32_fsdev/fsdev_common.c

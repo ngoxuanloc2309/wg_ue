@@ -23,6 +23,12 @@ add_library(ports_splc_port STATIC)
 target_sources(ports_splc_port PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_port.c
 )
+# CDC-only USB device: this port owns the USB peripheral (GW_USB_CDC_ENABLE).
+if(GW_USB_CDC_ENABLE)
+    target_sources(ports_splc_port PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/gw_usb_cdc.c
+    )
+endif()
 # sx_os_*() for FreeRTOS (SX_OS_USE_FREERTOS = 1) are OBJECT files that must be
 # part of the EXECUTABLE itself: inside a static library the linker would not
 # pull them in, because modbus_link.c (in another archive, later on the link

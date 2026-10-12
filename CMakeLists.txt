@@ -36,6 +36,15 @@ option(GW_USB_NETIF_ENABLE
        "Enable USB network configuration interface"
        OFF)
 
+option(GW_USB_CDC_ENABLE
+       "Enable a CDC-ACM only USB device (SimplePLC App link, no USB network)"
+       OFF)
+if(GW_USB_NETIF_ENABLE AND GW_USB_CDC_ENABLE)
+    message(FATAL_ERROR
+        "GW_USB_NETIF_ENABLE and GW_USB_CDC_ENABLE are mutually exclusive: "
+        "the USB device has one owner and one descriptor set")
+endif()
+
 option(GW_MDNS_ENABLE
        "Enable mDNS Web Config discovery"
        OFF)
@@ -69,6 +78,11 @@ if(GW_USB_NETIF_ENABLE)
     add_compile_definitions(GW_USB_NETIF_ENABLE=1)
 else()
     add_compile_definitions(GW_USB_NETIF_ENABLE=0)
+endif()
+if(GW_USB_CDC_ENABLE)
+    add_compile_definitions(GW_USB_CDC_ENABLE=1)
+else()
+    add_compile_definitions(GW_USB_CDC_ENABLE=0)
 endif()
 if(GW_MDNS_ENABLE)
     add_compile_definitions(GW_MDNS_ENABLE=1)

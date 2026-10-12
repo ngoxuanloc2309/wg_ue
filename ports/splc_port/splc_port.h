@@ -14,9 +14,12 @@
  *       RS485_OWNER_MODBUS_GATEWAY, so modbus_master / serial_tcp_server
  *       cannot take the same port: their rs485_port_acquire() fails).
  *   - App <-> device byte pipe            : splc_link_register()
- *       built on TinyUSB CDC instance 0 (the CDC-ACM of the composite
- *       descriptor). The CDC exists only after usb_netif_task ran tusb_init(),
- *       i.e. only with GW_USB_NETIF_ENABLE=1 and after WiFi got an IP.
+ *       built on TinyUSB CDC instance 0. Two ways to get that CDC:
+ *         - GW_USB_NETIF_ENABLE=1: the CDC-ACM of the composite descriptor;
+ *           it exists only after usb_netif_task ran tusb_init(), i.e. after
+ *           WiFi got an IP.
+ *         - GW_USB_CDC_ENABLE=1: a CDC-only device owned by this port
+ *           (gw_usb_cdc.c), started by splc_host_start(), no WiFi needed.
  *   - One FreeRTOS task that calls plc_engine_init() and then plc_engine_poll().
  *       SimplePLC is single-threaded: no other task may touch its tags/rules.
  *
