@@ -32,13 +32,15 @@ static bool s_started;
 static void gw_usb_cdc_log_diag(void)
 {
     LOGI(TAG, "not enumerated: irq=%lu last_istr=0x%08lX istr=0x%08lX "
-              "cntr=0x%08lX bcdr=0x%08lX daddr=0x%08lX",
+              "cntr=0x%08lX bcdr=0x%08lX daddr=0x%08lX chep0r=0x%08lX inited=%d",
          (unsigned long)g_usb_irq_count,
          (unsigned long)g_usb_last_istr,
          (unsigned long)USB_DRD_FS->ISTR,
          (unsigned long)USB_DRD_FS->CNTR,
          (unsigned long)USB_DRD_FS->BCDR,
-         (unsigned long)USB_DRD_FS->DADDR);
+         (unsigned long)USB_DRD_FS->DADDR,
+         (unsigned long)USB_DRD_FS->CHEP0R,
+         tud_inited() ? 1 : 0);
 }
 
 static void gw_usb_cdc_task(void *arg)
@@ -59,9 +61,20 @@ static void gw_usb_cdc_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    /* DIAG (temporary): EP0 register right after tusb_init(). A configured EP0
+     * reads non-zero here (control type + NAK status, about 0x2220). */
+    uint32_t chep0_init = USB_DRD_FS->CHEP0R;
+    uint32_t irq_init   = g_usb_irq_count;
     /* The USB interrupt enters tud_int_handler() only after this. */
     g_usb_tusb_initialized = 1U;
     LOGI(TAG, "TinyUSB device started (CDC-ACM only)");
+    LOGI(TAG, "diag: after tusb_init chep0r=0x%08lX irq=%lu istr=0x%08lX cntr=0x%08lX",
+         (unsigned long)chep0_init, (unsigned long)irq_init,
+         (unsigned long)USB_DRD_FS->ISTR, (unsigned long)USB_DRD_FS->CNTR);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    LOGI(TAG, "diag: +50ms chep0r=0x%08lX irq=%lu last_istr=0x%08lX daddr=0x%08lX",
+         (unsigned long)USB_DRD_FS->CHEP0R, (unsigned long)g_usb_irq_count,
+         (unsigned long)g_usb_last_istr, (unsigned long)USB_DRD_FS->DADDR);
 
     bool was_mounted = false;
     bool was_open = false;
