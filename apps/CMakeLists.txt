@@ -1,5 +1,3 @@
-# Apps module - placeholder for combined apps
-# Individual app CMakeLists.txt files are included from parent CMakeLists.txt
 add_library(apps_main STATIC)
 target_sources(apps_main PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/gateway.c
