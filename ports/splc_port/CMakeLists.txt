@@ -15,7 +15,7 @@ set(SPLC_OPTS_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE PATH
 
 # SimplePLC finds the host's logger.h (SPLC_LOGGER_BUILTIN = 0) and FreeRTOS
 # headers through the include directories/targets already set up at top level.
-add_subdirectory(${CMAKE_SOURCE_DIR}/libs/simple_plc/simple_plc
+add_subdirectory(${CMAKE_SOURCE_DIR}/libs/simple_plc
                  ${CMAKE_CURRENT_BINARY_DIR}/simple_plc)
 
 # --- Host port -----------------------------------------------------------
