@@ -309,7 +309,7 @@ static void splc_task(void *arg)
 #endif
         }
         plc_engine_poll();
-        gw_rs485_diag_poll(1U);
+        // gw_rs485_diag_poll(1U);
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
