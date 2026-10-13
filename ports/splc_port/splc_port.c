@@ -20,7 +20,6 @@
 #include "sx_adc.h"
 #include "board_ethernet_wifi_gateway.h"
 #include "splc_log.h"
-#include "gw_rs485_diag.h"
 
 #if GW_USB_CDC_ENABLE
 #include "gw_usb_cdc.h"
