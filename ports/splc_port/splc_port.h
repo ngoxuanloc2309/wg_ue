@@ -13,8 +13,13 @@
  *       built on the host driver Drivers/uart/rs485_driver.c (owner
  *       RS485_OWNER_MODBUS_GATEWAY, so modbus_master / serial_tcp_server
  *       cannot take the same port: their rs485_port_acquire() fails).
- *   - App <-> device byte pipe            : splc_link_register()
- *       built on TinyUSB CDC instance 0. Two ways to get that CDC:
+ *   - App <-> device byte pipe            : splc_link_register(), ONE of:
+ *       a) RS485 (SPLC_HOST_APP_RS485_PORT >= 0): a second host RS485 port, the
+ *          device is a Modbus RTU SLAVE for the App (PC + USB-RS485 dongle).
+ *          Two functions on top of rs485_send()/rs485_recv_polling(): output()
+ *          and the pump that feeds splc_link_input(). No USB involved.
+ *       b) USB CDC (SPLC_HOST_APP_RS485_PORT < 0, default) built on TinyUSB
+ *          CDC instance 0. Two ways to get that CDC:
  *         - GW_USB_NETIF_ENABLE=1: the CDC-ACM of the composite descriptor;
  *           it exists only after usb_netif_task ran tusb_init(), i.e. after
  *           WiFi got an IP.
@@ -38,6 +43,26 @@
 #ifndef SPLC_HOST_RS485_PORT
 #define SPLC_HOST_RS485_PORT      1
 #endif
+
+/* App link over RS485: index of the host RS485 port (0 = USART3, 1 = USART6,
+ * 2 = USART10) the App (PC + USB-RS485 dongle) is wired to. Negative (default)
+ * = the App link is the USB CDC. Must be a DIFFERENT port than
+ * SPLC_HOST_RS485_PORT (that one is the master bus to the I/O boards) and must
+ * not be configured for any host service (the port is taken as
+ * RS485_OWNER_MODBUS_GATEWAY, like the I/O port). The App's Modbus RTU unit id
+ * is SPLC_MODBUS_UNIT_ID. */
+#ifndef SPLC_HOST_APP_RS485_PORT
+#define SPLC_HOST_APP_RS485_PORT  (-1)
+#endif
+#ifndef SPLC_HOST_APP_RS485_BAUD
+#define SPLC_HOST_APP_RS485_BAUD  115200U   /* the PC side must use the same, 8N1 */
+#endif
+#ifndef SPLC_HOST_APP_RS485_PARITY
+#define SPLC_HOST_APP_RS485_PARITY 0
+#endif
+
+/* Derived (do not define): 1 when the App link is the RS485 port above. */
+#define SPLC_HOST_APP_LINK_RS485  (SPLC_HOST_APP_RS485_PORT >= 0)
 
 /* Line settings of the I/O boards' RS485 bus. parity: 0 none, 1 odd, 2 even
  * (rs485_driver.c). Data bits 8, stop bits 1. */
@@ -63,6 +88,18 @@
 #endif
 #if (SPLC_HOST_RS485_PARITY < 0) || (SPLC_HOST_RS485_PARITY > 2)
 #error "SPLC_HOST_RS485_PARITY must be 0, 1 or 2"
+#endif
+#if SPLC_HOST_APP_RS485_PORT > 2
+#error "SPLC_HOST_APP_RS485_PORT must be -1 (USB CDC) or 0 (USART3), 1 (USART6), 2 (USART10)"
+#endif
+#if SPLC_HOST_APP_LINK_RS485 && (SPLC_HOST_APP_RS485_PORT == SPLC_HOST_RS485_PORT)
+#error "SPLC_HOST_APP_RS485_PORT is the same port as SPLC_HOST_RS485_PORT (I/O boards bus): the App link needs its own RS485 port"
+#endif
+#if (SPLC_HOST_APP_RS485_PARITY < 0) || (SPLC_HOST_APP_RS485_PARITY > 2)
+#error "SPLC_HOST_APP_RS485_PARITY must be 0, 1 or 2"
+#endif
+#if SPLC_HOST_APP_LINK_RS485 && GW_USB_CDC_ENABLE
+#error "App link is RS485 (SPLC_HOST_APP_RS485_PORT >= 0) but GW_USB_CDC_ENABLE=ON starts a USB CDC nobody uses: configure with -DGW_USB_CDC_ENABLE=OFF"
 #endif
 
 #ifdef __cplusplus

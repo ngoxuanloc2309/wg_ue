@@ -40,7 +40,17 @@
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 0
 
 /* ---- options of ports/splc_port (defaults in splc_port.h) ---------------- */
-#define SPLC_HOST_RS485_PORT          1          /* USART6 */
+#define SPLC_HOST_RS485_PORT          0          /* USART3: I/O boards bus (moved off USART6, now the App link) */
 #define SPLC_HOST_RS485_BAUD          115200U    /* ASSUMED: I/O board baud, to be confirmed */
+
+/* App link (SimplePLC.Studio / test scripts) over RS485 instead of USB: the PC
+ * reaches the gateway through a USB-RS485 dongle wired to this host RS485 port
+ * (0 = USART3, 1 = USART6, 2 = USART10). It must NOT be the I/O boards port above
+ * and must not be given to a host service (modbus_master / serial_tcp_server).
+ * USART6 = index 1, chosen by the user for the rule-upload test.
+ * Remove the line (or set -1) to get the USB CDC App link back; with RS485 the
+ * firmware must be configured with -DGW_USB_CDC_ENABLE=OFF. */
+#define SPLC_HOST_APP_RS485_PORT      1          /* USART6 */
+#define SPLC_HOST_APP_RS485_BAUD      115200U    /* PC side: same baud, 8N1 */
 
 #endif /* SPLCOPTS_H */

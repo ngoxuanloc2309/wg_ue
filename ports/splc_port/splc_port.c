@@ -8,7 +8,9 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#if !SPLC_HOST_APP_LINK_RS485
 #include "tusb.h"
+#endif
 #include "rs485_driver.h"
 
 #include "plc_engine.h"
@@ -18,6 +20,7 @@
 #include "sx_adc.h"
 #include "board_ethernet_wifi_gateway.h"
 #include "splc_log.h"
+#include "gw_rs485_diag.h"
 
 #if GW_USB_CDC_ENABLE
 #include "gw_usb_cdc.h"
@@ -25,6 +28,7 @@
 
 static const char *TAG = "SPLC_PORT";
 
+#if !SPLC_HOST_APP_LINK_RS485
 /* The CDC-ACM is the only CDC class instance of the host's descriptor
  * (ports/usb_port/Target/usb_descriptors.c, or usb_descriptors_cdc.c with
  * GW_USB_CDC_ENABLE); the network function is RNDIS / ECM / NCM, not a CDC
@@ -35,6 +39,7 @@ static const char *TAG = "SPLC_PORT";
  * (Core/Src/usb.c).
  * Until then no tud_*() call is allowed. */
 extern volatile uint8_t g_usb_tusb_initialized;
+#endif /* !SPLC_HOST_APP_LINK_RS485 */
 
 #define SPLC_PORT_CHECK_MS      1000U
 
@@ -63,20 +68,30 @@ static int rs485_write_cb(void *ctx, const uint8_t *buf, uint16_t len, uint32_t 
     return (n == (int32_t)len) ? 0 : -1;
 }
 
+/* One RS485 port this file keeps ours: the I/O boards bus, and the App link
+ * port when SPLC_HOST_APP_RS485_PORT is used. */
+typedef struct {
+    uint8_t     port;
+    uint32_t    baud;
+    uint8_t     parity;            /* 0 none, 1 odd, 2 even */
+    const char *name;              /* for the log */
+    int8_t      last_problem;      /* -1 none yet, 0 ok, 1 owner, 2 init */
+} splc_port_watch_t;
+
 /*
- * Keep the RS485 port ours and configured. Runs in the engine task every
+ * Keep an RS485 port ours and configured. Runs in the engine task every
  * SPLC_PORT_CHECK_MS. The host can change the port under us (web UI, config
  * apply) or may not have initialised it yet, so this is a loop, not a one-off:
  *   - take ownership as RS485_OWNER_MODBUS_GATEWAY (fails while another
  *     service owns the port: then we only log, once per change),
  *   - (re)apply baud / parity when the port is not RUNNING or differs.
  * While this is not satisfied rs485_send()/recv return -1 and the virtual I/O
- * nodes simply stay offline; they recover on their own afterwards.
+ * nodes (or the App link) simply stay unreachable; they recover on their own
+ * afterwards.
  */
-static void splc_check_port(void)
+static void splc_check_port(splc_port_watch_t *w)
 {
-    static int8_t s_last_problem = -1;   /* -1 none yet, 0 ok, 1 owner, 2 init */
-    const uint8_t port = (uint8_t)SPLC_HOST_RS485_PORT;
+    const uint8_t port = w->port;
     rs485_port_status_t st;
     int8_t problem = 0;
 
@@ -95,13 +110,13 @@ static void splc_check_port(void)
         }
         if (problem == 0) {
             if (st.state != RS485_STATE_RUNNING ||
-                st.config.baudrate != SPLC_HOST_RS485_BAUD ||
-                st.config.parity   != SPLC_HOST_RS485_PARITY ||
+                st.config.baudrate != w->baud ||
+                st.config.parity   != w->parity ||
                 st.config.data_bits != 8U || st.config.stop_bits != 1U) {
                 rs485_runtime_config_t cfg = {
-                    .baudrate  = SPLC_HOST_RS485_BAUD,
+                    .baudrate  = w->baud,
                     .data_bits = 8U,
-                    .parity    = (uint8_t)SPLC_HOST_RS485_PARITY,
+                    .parity    = w->parity,
                     .stop_bits = 1U,
                 };
                 if (rs485_port_reconfigure(port, &cfg) != 0) {
@@ -111,20 +126,77 @@ static void splc_check_port(void)
         }
     }
 
-    if (problem != s_last_problem) {
+    if (problem != w->last_problem) {
         if (problem == 1) {
-            log_error(TAG, "RS485 port %d is owned by another host service; "
-                           "virtual I/O is NOT served", SPLC_HOST_RS485_PORT);
+            log_error(TAG, "RS485 port %d (%s) is owned by another host service; "
+                           "it is NOT served", (int)port, w->name);
         } else if (problem == 2) {
-            log_warn(TAG, "RS485 port %d not ready (driver not initialised "
-                          "or reconfigure failed), retrying", SPLC_HOST_RS485_PORT);
-        } else if (s_last_problem > 0) {
-            log_info(TAG, "RS485 port %d ready", SPLC_HOST_RS485_PORT);
+            log_warn(TAG, "RS485 port %d (%s) not ready (driver not initialised "
+                          "or reconfigure failed), retrying", (int)port, w->name);
+        } else if (w->last_problem > 0) {
+            log_info(TAG, "RS485 port %d (%s) ready", (int)port, w->name);
         }
-        s_last_problem = problem;
+        w->last_problem = problem;
     }
 }
 
+static splc_port_watch_t s_io_watch = {
+    .port = (uint8_t)SPLC_HOST_RS485_PORT, .baud = SPLC_HOST_RS485_BAUD,
+    .parity = (uint8_t)SPLC_HOST_RS485_PARITY, .name = "I/O boards", .last_problem = -1,
+};
+
+#if SPLC_HOST_APP_LINK_RS485
+/* ------------------------------------------------------------------------ */
+/* App link: modbus_link ops on top of a second host RS485 port (slave)      */
+/* ------------------------------------------------------------------------ */
+
+/* The whole link is the two functions modbus_link asks a port for. Both run in
+ * the engine task (modbus_link contract), which is also the only caller of
+ * splc_link_input(). The host driver already owns the UART interrupt, the RX
+ * stream buffer (RS485_RX_BUF_SIZE) and the DE pin: this file adds no UART
+ * code. MAX485 has DE and /RE on one pin, so the receiver is off while we
+ * transmit and our own frame is never read back as a request. */
+
+#define SPLC_APP_PORT           ((uint8_t)SPLC_HOST_APP_RS485_PORT)
+
+/* Called once per scan and while read()/write() wait: move received bytes into
+ * the core's ring. NOTE: rs485_recv_polling() counts every empty read in
+ * counters.timeouts of this port (host driver behaviour, left untouched), so
+ * that counter is meaningless for the App port. */
+static void app_process(void *ctx)
+{
+    (void)ctx;
+    uint8_t tmp[64];
+    for (;;) {
+        int32_t n = rs485_recv_polling(SPLC_APP_PORT, tmp, sizeof(tmp), 0U);
+        if (n <= 0) {
+            break;               /* nothing queued, or the port is not RUNNING yet */
+        }
+        if (splc_link_input(tmp, (uint16_t)n) < (uint16_t)n) {
+            break;               /* ring full: the core counted the dropped bytes */
+        }
+    }
+}
+
+/* rs485_send() drives DE and returns after the last bit left the UART. It blocks
+ * the engine task for the frame time (~3.6 ms for 41 B, ~22 ms for 250 B at
+ * 115200): modbus_link's "output does not block" is relaxed here on purpose. */
+static int32_t app_output(const uint8_t *buf, uint16_t len, void *ctx)
+{
+    (void)ctx;
+    if (len == 0U) {
+        return 0;
+    }
+    int32_t n = rs485_send(SPLC_APP_PORT, buf, len);
+    return (n == (int32_t)len) ? (int32_t)len : -1;   /* -1: port not ready / TX timeout */
+}
+
+static splc_port_watch_t s_app_watch = {
+    .port = (uint8_t)SPLC_HOST_APP_RS485_PORT, .baud = SPLC_HOST_APP_RS485_BAUD,
+    .parity = (uint8_t)SPLC_HOST_APP_RS485_PARITY, .name = "App link", .last_problem = -1,
+};
+
+#else /* USB CDC */
 /* ------------------------------------------------------------------------ */
 /* App link: modbus_link ops on top of TinyUSB CDC instance 0                */
 /* ------------------------------------------------------------------------ */
@@ -169,6 +241,7 @@ static int32_t cdc_output(const uint8_t *buf, uint16_t len, void *ctx)
     (void)tud_cdc_n_write_flush(SPLC_CDC_ITF);
     return (int32_t)n;   /* 0 = FIFO full, the core retries */
 }
+#endif /* SPLC_HOST_APP_LINK_RS485 */
 
 /* ------------------------------------------------------------------------ */
 /* Peripherals the host does not have (SPLC_RTC_BUILTIN / SPLC_ADC_BUILTIN)  */
@@ -230,9 +303,13 @@ static void splc_task(void *arg)
     for (;;) {
         if ((TickType_t)(xTaskGetTickCount() - last_check) >= pdMS_TO_TICKS(SPLC_PORT_CHECK_MS)) {
             last_check = xTaskGetTickCount();
-            splc_check_port();
+            splc_check_port(&s_io_watch);
+#if SPLC_HOST_APP_LINK_RS485
+            splc_check_port(&s_app_watch);
+#endif
         }
         plc_engine_poll();
+        gw_rs485_diag_poll(1U);
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
@@ -259,8 +336,13 @@ bool splc_host_start(void)
 
     const splc_link_ops_t ops = {
         .ctx     = NULL,
+#if SPLC_HOST_APP_LINK_RS485
+        .output  = app_output,
+        .process = app_process,
+#else
         .output  = cdc_output,
         .process = cdc_process,
+#endif
         .kind    = MODBUS_TRANSPORT_KIND_RTU,
         .unit_id = (uint8_t)SPLC_MODBUS_UNIT_ID,
     };
