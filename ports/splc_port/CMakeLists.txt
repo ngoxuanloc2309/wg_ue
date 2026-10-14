@@ -22,6 +22,7 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/libs/simple_plc
 add_library(ports_splc_port STATIC)
 target_sources(ports_splc_port PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_port.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/splc_mqtt_port.c
        ${CMAKE_CURRENT_SOURCE_DIR}/gw_rs485_diag.c
 )
 # CDC-only USB device: this port owns the USB peripheral (GW_USB_CDC_ENABLE).
@@ -42,4 +43,6 @@ target_link_libraries(ports_splc_port PUBLIC
     tinyusb         # tusb.h: the host owns USB (SPLC_PORT_USB_CDC = 0)
     drivers_uart    # rs485_driver.h
     logger
+    apps_mqtt_client   # mqtt_client.h: publish_ex + broker override (splc_mqtt_port.c)
+    apps_settings      # config_manager.h: g_sys_config (device_id)
 )

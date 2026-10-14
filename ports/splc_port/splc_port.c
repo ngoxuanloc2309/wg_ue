@@ -14,6 +14,7 @@
 #include "rs485_driver.h"
 
 #include "plc_engine.h"
+#include "splc_mqtt_port.h"
 #include "modbus_link.h"
 #include "modbus_serial.h"
 #include "sx_rtc.h"
@@ -297,6 +298,7 @@ static void splc_task(void *arg)
     (void)arg;
     TickType_t last_check = xTaskGetTickCount() - pdMS_TO_TICKS(SPLC_PORT_CHECK_MS);
 
+    splc_mqtt_port_init();   /* publish callback; must precede plc_engine_init() */
     plc_engine_init();   /* board_hw_init() builds the virtual I/O from the port */
 
     for (;;) {
@@ -308,6 +310,7 @@ static void splc_task(void *arg)
 #endif
         }
         plc_engine_poll();
+        splc_mqtt_port_poll((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
         // gw_rs485_diag_poll(1U);
         vTaskDelay(pdMS_TO_TICKS(1U));
     }

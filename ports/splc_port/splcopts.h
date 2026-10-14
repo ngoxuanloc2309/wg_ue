@@ -39,6 +39,11 @@
  * on the gateway: keep the emergency retain save off. */
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 0
 
+/* MQTT Publish (docs/plc_mqtt_design.md): SimplePLC decides when to publish and
+ * renders the payload; ports/splc_port/splc_mqtt_port.c hands it to apps/mqtt_client.
+ * TLS stays unsupported (the bundled lwIP client has none). */
+#define SPLC_MQTT_ENABLE              1
+
 /* ---- options of ports/splc_port (defaults in splc_port.h) ---------------- */
 #define SPLC_HOST_RS485_PORT          0          /* USART3: I/O boards bus (moved off USART6, now the App link) */
 #define SPLC_HOST_RS485_BAUD          115200U    /* ASSUMED: I/O board baud, to be confirmed */

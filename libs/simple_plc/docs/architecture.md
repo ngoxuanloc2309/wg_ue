@@ -3,8 +3,9 @@
 > Tài liệu tham chiếu kiến trúc, **đồng bộ với code nhánh `board_dev_gw` và
 > Wire Profile V2.0**. Trạng thái/việc đang làm: `docs/handoff.md`. Nguồn sự thật cho
 > wire format: `SimplePLC_App_MCU_Structs_v2.0_Self_Describing_Profile.md` (struct, memory
-> map) và `SimplePLC_Wire_Contract_V2_Draft.md` (hành vi). Khi file này mâu thuẫn với
-> chúng, chúng thắng. `SimplePLC_RuleStruct_MCU_Spec_v0.1.md` chỉ còn đúng cho logic
+> map) và `firmware/MCU_CONFORMANCE_SPECIFICATION_V2_0.md` (hành vi; Wire Contract cũ đã bị
+> xoá). Khi file này mâu thuẫn với chúng, chúng thắng (trừ chỗ chúng mâu thuẫn code thật — xem
+> `handoff.md`). `SimplePLC_RuleStruct_MCU_Spec_v0.1.md` chỉ còn đúng cho logic
 > Rule Engine (5 bước Trigger→Compare→Dwell→Guard→Action).
 
 ## 0. Bối cảnh
@@ -259,7 +260,8 @@ timeout bằng tick thật, CRC bằng `nmbs_crc_calc()` (byte-swapped, ghi big-
   rule (staging → verify CRC16 → commit nguyên tử), Diag Control (ENTER/HEARTBEAT/EXIT,
   lease, ghi tag trong diag, retain draft), RTC, FB, System Command.
 - **`plc_rule_flash`**: lưu Rule Table A/B (xem handoff mục 1 về thứ tự và recovery); bản
-  ghi = header 8 B (seq_num, rule_count + cờ FB, crc16) + rule wire + đoạn FB 128 B.
+  ghi = header 8 B (seq_num, rule_count + cờ FB/MQTT, crc16) + rule wire + đoạn FB 128 B [+ đoạn MQTT 960 B, bit 13,
+  chỉ khi `SPLC_MQTT_ENABLE=1`].
 - **`plc_retain`**: snapshot xoay vòng cho VREG_RETAIN (record 208 B: seq, count, crc16,
   tag_idx+value); khôi phục lúc boot lấy record CRC-hợp-lệ có seq lớn nhất; lưu theo
   COMMIT_RETAIN, chu kỳ, và PVD khẩn cấp (ISR).

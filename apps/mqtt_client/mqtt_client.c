@@ -77,6 +77,32 @@ static bool mqtt_config_retain(void)
     return retain;
 }
 
+/* ---- SimplePLC port hooks (additive; see mqtt_client.h) --------------------
+ * The override is written by ports/splc_port (task SPLC) and read here by the
+ * MQTT_RECONN task, always as a whole copy inside a short critical section. */
+static mqtt_config_override_t s_override;                /* zero = inactive */
+static volatile uint32_t s_connected_override_gen = 0U;  /* gen of the live connection */
+
+void mqtt_client_set_override(const mqtt_config_override_t *ov)
+{
+    if (ov == NULL) return;
+    taskENTER_CRITICAL();
+    s_override = *ov;
+    taskEXIT_CRITICAL();
+}
+
+static void mqtt_override_get(mqtt_config_override_t *out)
+{
+    taskENTER_CRITICAL();
+    *out = s_override;
+    taskEXIT_CRITICAL();
+}
+
+uint32_t mqtt_client_connected_override_generation(void)
+{
+    return s_connected_override_gen;
+}
+
 static ip_addr_t s_resolved_ip;
 static bool s_dns_resolved = false;
 static bool s_dns_in_progress = false;
@@ -113,6 +139,7 @@ typedef struct {
     char base_topic[64];
     char client_id[48];
     uint16_t keepalive_s;
+    uint32_t override_generation;   /* SimplePLC port: generation this attempt was built from */
     uint32_t route_generation;
     uint32_t attempt_epoch;
     bool in_use;
@@ -251,6 +278,7 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
         LOGI(TAG, "MQTT Connected: route=%s generation=%lu",
              mqtt_default_route_name(),
              (unsigned long)s_mqtt_connect_generation);
+        s_connected_override_gen = attempt->override_generation;
         s_mqtt_connected = true;
         s_mqtt_state = MQTT_STATE_CONNECTED;
         s_mqtt_connect_attempt = 0U;
@@ -536,6 +564,7 @@ static void mqtt_reconnect_task(void *params) {
         sys_config_lock();
         mqtt_enabled = g_sys_config.mqtt.enabled;
         sys_config_unlock();
+        if (s_override.active) mqtt_enabled = true;   /* App-configured broker (SimplePLC) */
 
         if (!mqtt_enabled && (s_mqtt_connected || s_mqtt_connecting ||
                               s_dns_in_progress)) {
@@ -676,6 +705,28 @@ static void mqtt_reconnect_task(void *params) {
             port = g_sys_config.mqtt.port;
             sys_config_unlock();
 
+            /* SimplePLC port: broker configured by the App overrides the host's
+             * broker/credentials/client id/keepalive. base_topic (LWT) stays the host's. */
+            uint32_t override_generation;
+            {
+                mqtt_config_override_t ov;
+                mqtt_override_get(&ov);
+                override_generation = ov.generation;
+                if (ov.active) {
+                    enabled = true;
+                    strncpy(broker_url, ov.broker_url, sizeof(broker_url) - 1U);
+                    broker_url[sizeof(broker_url) - 1U] = '\0';
+                    strncpy(username, ov.username, sizeof(username) - 1U);
+                    username[sizeof(username) - 1U] = '\0';
+                    strncpy(password, ov.password, sizeof(password) - 1U);
+                    password[sizeof(password) - 1U] = '\0';
+                    strncpy(client_id, ov.client_id, sizeof(client_id) - 1U);
+                    client_id[sizeof(client_id) - 1U] = '\0';
+                    keepalive_s = ov.keepalive_s;
+                    port = ov.port;
+                }
+            }
+
             if (enabled && strlen(broker_url) > 0) {
                 if (ipaddr_aton(broker_url, &broker_ip)) {
                     s_resolved_ip = broker_ip;
@@ -733,6 +784,7 @@ static void mqtt_reconnect_task(void *params) {
                     strncpy(command->base_topic, base_topic, sizeof(command->base_topic) - 1U);
                     strncpy(command->client_id, client_id, sizeof(command->client_id) - 1U);
                     command->keepalive_s = keepalive_s;
+                    command->override_generation = override_generation;
                     command->route_generation = network_get_route_generation();
                     if (s_mqtt_attempt_context != NULL ||
                         s_mqtt_state != MQTT_STATE_IDLE) {
@@ -846,6 +898,68 @@ int mqtt_client_publish(const char *topic, const char *payload) {
     memcpy(&request->data[topic_len + 1U], payload, payload_len + 1U);
 
     if (tcpip_try_callback(mqtt_publish_request_cb, request) != ERR_OK) {
+        vPortFree(request);
+        return -1;
+    }
+    return 0;
+}
+
+/* ---- SimplePLC port: publish with its own QoS / retain ---------------------
+ * Same path as mqtt_client_publish() (copy into one heap block, run on the
+ * tcpip thread) but QoS/retain come from the caller instead of g_sys_config,
+ * and nothing is queued while disconnected: returns -1 so the caller retries. */
+typedef struct {
+    uint16_t topic_len;
+    uint8_t qos;
+    uint8_t retain;
+    char data[];
+} mqtt_publish_ex_request_t;
+
+static void mqtt_publish_ex_request_cb(void *arg) {
+    mqtt_publish_ex_request_t *request = (mqtt_publish_ex_request_t *)arg;
+    const char *topic;
+    const char *payload;
+    err_t err = ERR_IF;
+
+    if (request == NULL) return;
+    topic = request->data;
+    payload = &request->data[request->topic_len + 1U];
+    if (s_mqtt_client != NULL && s_mqtt_connected) {
+        err = mqtt_publish(s_mqtt_client, topic, payload, strlen(payload),
+                           request->qos, request->retain != 0U,
+                           mqtt_publish_cb, NULL);
+    }
+    if (err != ERR_OK) LOGE(TAG, "Publish(ex) queue failed with error %d", err);
+    vPortFree(request);
+}
+
+int mqtt_client_publish_ex(const char *topic, const char *payload,
+                           uint8_t qos, bool retain) {
+    mqtt_publish_ex_request_t *request;
+    size_t topic_len;
+    size_t payload_len;
+    size_t request_size;
+
+    if (topic == NULL || payload == NULL || !s_mqtt_client || !s_mqtt_connected) {
+        return -1;
+    }
+    topic_len = strlen(topic);
+    payload_len = strlen(payload);
+    if (topic_len > UINT16_MAX ||
+        topic_len > SIZE_MAX - payload_len - sizeof(*request) - 2U) {
+        return -1;
+    }
+    request_size = sizeof(*request) + topic_len + 1U + payload_len + 1U;
+    request = pvPortMalloc(request_size);
+    if (request == NULL) return -1;
+
+    request->topic_len = (uint16_t)topic_len;
+    request->qos = (qos <= 2U) ? qos : 1U;
+    request->retain = retain ? 1U : 0U;
+    memcpy(request->data, topic, topic_len + 1U);
+    memcpy(&request->data[topic_len + 1U], payload, payload_len + 1U);
+
+    if (tcpip_try_callback(mqtt_publish_ex_request_cb, request) != ERR_OK) {
         vPortFree(request);
         return -1;
     }
