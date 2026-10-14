@@ -49,15 +49,6 @@ The smartphone may be artificially picky about which Ethernet MAC address to rec
 try changing the first byte of tud_network_mac_address[] below from 0x02 to 0x00 (clearing bit 1).
 */
 
-/*
- * GW_USB_CDC_ENABLE = 1 (CDC-ACM only USB device, see ports/splc_port/gw_usb_cdc.c):
- * there is no USB network class, and TinyUSB is owned by the gw_usb_cdc task.
- * Only the two public entry points remain, as stubs, because wifi_driver.c,
- * http_server.c and gateway.c include usb_netif.h unconditionally. Everything
- * else (lwIP netif, DHCP/DNS, tud_network_*_cb, tud_*_cb, usb_netif_task) is
- * compiled out: with CFG_TUD_ECM_RNDIS = CFG_TUD_NCM = 0 those APIs do not exist.
- */
-#if !GW_USB_CDC_ENABLE
 #include "main.h"
 #include "usb.h"
 #include "tusb.h"
@@ -509,16 +500,4 @@ void tud_resume_cb(void) {
   blink_interval_ms = tud_mounted() ? BLINK_MOUNTED : BLINK_NOT_MOUNTED;
 }
 
-#else  /* GW_USB_CDC_ENABLE */
 
-#include <stdbool.h>
-
-void usb_netif_init(void) {
-  /* Nothing to start: the USB device is created by gw_usb_cdc_start(). */
-}
-
-bool usb_netif_is_available(void) {
-  return false;  /* no USB network interface in CDC-only mode */
-}
-
-#endif /* GW_USB_CDC_ENABLE */

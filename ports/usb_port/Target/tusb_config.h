@@ -129,18 +129,10 @@ extern "C" {
 
 // Network class has 2 drivers: ECM/RNDIS and NCM.
 // Only one of the drivers can be enabled
-#if defined(GW_USB_CDC_ENABLE) && GW_USB_CDC_ENABLE
-// CDC-only device (SimplePLC App link): one ACM, no network class.
-#define CFG_TUD_CDC           1
-#define CFG_TUD_ECM_RNDIS     0
-#define CFG_TUD_NCM           0
-#else
 #define CFG_TUD_CDC           2
 #define CFG_TUD_ECM_RNDIS     USE_ECM
 #define CFG_TUD_NCM           (1 - CFG_TUD_ECM_RNDIS)
-#endif
-// Buffer sizes for the CDC channels. 512 B holds the longest RTU frame (256 B)
-// while the SimplePLC task sleeps one scan.
+// Buffer sizes for the CDC channels
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512
 #ifdef __cplusplus
