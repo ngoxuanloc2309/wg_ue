@@ -129,9 +129,18 @@ extern "C" {
 
 // Network class has 2 drivers: ECM/RNDIS and NCM.
 // Only one of the drivers can be enabled
+#if defined(GW_USB_CDC_ENABLE) && GW_USB_CDC_ENABLE
+/* CDC-only device (usb_descriptors_cdc.c): one ACM, no USB network class.
+ * ecm_rndis_device.c / net_device.c then compile to nothing, so the
+ * networking helpers (dhserver, dnserver, rndis_reports) are not needed. */
+#define CFG_TUD_CDC           1
+#define CFG_TUD_ECM_RNDIS     0
+#define CFG_TUD_NCM           0
+#else
 #define CFG_TUD_CDC           2
 #define CFG_TUD_ECM_RNDIS     USE_ECM
 #define CFG_TUD_NCM           (1 - CFG_TUD_ECM_RNDIS)
+#endif
 // Buffer sizes for the CDC channels
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512

@@ -4,7 +4,14 @@ enable_language(C CXX ASM)
 
 add_library(network_usb_netif STATIC)
 
-file(GLOB USB_NET_SOURCE "usb_netif.c")
+if(GW_USB_CDC_ENABLE)
+    # CDC-only USB device: no USB network function, so usb_netif.c (lwIP netif,
+    # DHCP/DNS server, RNDIS/ECM callbacks) is replaced by a stub that keeps the
+    # two public functions alive.
+    set(USB_NET_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/usb_netif_stub.c)
+else()
+    file(GLOB USB_NET_SOURCE "usb_netif.c")
+endif()
 
 target_sources(network_usb_netif PRIVATE ${USB_NET_SOURCE})
 
