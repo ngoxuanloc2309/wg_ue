@@ -61,7 +61,7 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define USART10_DE_Pin GPIO_PIN_4
+#define USART10_DE_Pin GPIO_PIN_2
 #define USART10_DE_GPIO_Port GPIOE
 #define OCTOSPI_IO2_Pin GPIO_PIN_2
 #define OCTOSPI_IO2_GPIO_Port GPIOC

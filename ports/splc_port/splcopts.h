@@ -45,7 +45,7 @@
 #define SPLC_MQTT_ENABLE              1
 
 /* ---- options of ports/splc_port (defaults in splc_port.h) ---------------- */
-#define SPLC_HOST_RS485_PORT          2          /* USART10: I/O boards bus */
+#define SPLC_HOST_RS485_PORT          2          /* USART3: I/O boards bus */
 #define SPLC_HOST_RS485_BAUD          115200U    /* ASSUMED: I/O board baud, to be confirmed */
 
 /* App link (SimplePLC.Studio / test scripts) over RS485 instead of USB: the PC

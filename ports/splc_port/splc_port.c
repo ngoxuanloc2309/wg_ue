@@ -21,6 +21,7 @@
 #include "sx_adc.h"
 #include "board_ethernet_wifi_gateway.h"
 #include "splc_log.h"
+#include "gw_rs485_diag.h"
 
 #if GW_USB_CDC_ENABLE
 #include "gw_usb_cdc.h"
@@ -311,7 +312,7 @@ static void splc_task(void *arg)
         }
         plc_engine_poll();
         splc_mqtt_port_poll((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-        // gw_rs485_diag_poll(1U);
+        gw_rs485_diag_poll(1U);
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }

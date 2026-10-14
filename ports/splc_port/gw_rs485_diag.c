@@ -20,7 +20,7 @@
 #define GW_RS485_DIAG_DRAIN         1      /* 1 = read the RX stream here        */
 #endif
 #ifndef GW_RS485_DIAG_PORT
-#define GW_RS485_DIAG_PORT          1U     /* only used by the --wrap hook       */
+#define GW_RS485_DIAG_PORT          2U     /* only used by the --wrap hook       */
 #endif
 /* Bring-up only: 1 = send "hello\r\n" on the diag port every GW_RS485_DIAG_TX_PERIOD_MS.
  * Open the PC's USB-RS485 COM port in a terminal: if "hello" shows up, TX path + DE
@@ -32,16 +32,17 @@
 #define GW_RS485_DIAG_TX_PERIOD_MS  2000U
 #endif
 
-/* RX pin of the diag port (USART6_RX = PC7), read as a plain input level. */
+/* RX pin of the diag port (USART10_RX = PE2; PE4 is USART10_DE, PE3 is TX), read as a plain
+ * input level. Must match the port passed to gw_rs485_diag_poll(). USART6_RX = PC7. */
 #ifndef GW_RS485_DIAG_RXPIN_PORT
-#define GW_RS485_DIAG_RXPIN_PORT    GPIOE
+#define GW_RS485_DIAG_RXPIN_PORT    GPIOD
 #endif
 #ifndef GW_RS485_DIAG_RXPIN_PIN
-#define GW_RS485_DIAG_RXPIN_PIN     GPIO_PIN_4
+#define GW_RS485_DIAG_RXPIN_PIN     GPIO_PIN_9
 #endif
 
 /* Bring-up only: software logic analyzer on the RX pin. After each TX test it waits (max
- * GW_RS485_DIAG_CAP_WAIT_MS) for the first falling edge on PC7, then records the level
+ * GW_RS485_DIAG_CAP_WAIT_MS) for the first falling edge on the RX pin, then records the level
  * changes for GW_RS485_DIAG_CAP_US with interrupts off and logs them as run lengths in us.
  * It blocks the SPLC task while it waits (task context only). Set to 0 once the link works. */
 #ifndef GW_RS485_DIAG_CAPTURE
@@ -201,7 +202,7 @@ static void gw_rs485_diag_capture_and_log(void)
     const uint16_t n = gw_rs485_diag_capture(runs, GW_RS485_DIAG_CAP_MAX_RUNS, &overflow);
 
     if (n == 0U) {
-        log_info(TAG, "CAP: no falling edge on PE4 within %u ms", (unsigned)GW_RS485_DIAG_CAP_WAIT_MS);
+        log_info(TAG, "CAP: no falling edge on RX pin (PE2) within %u ms", (unsigned)GW_RS485_DIAG_CAP_WAIT_MS);
         return;
     }
     log_info(TAG, "CAP: %u runs in %u us window%s (first run = LOW, then alternating; values in us, 1 bit = 8.7 us)",
@@ -279,7 +280,7 @@ void gw_rs485_diag_poll(uint8_t port)
             const int32_t r = rs485_send(port, hello, (uint16_t)(sizeof hello - 1U));
             log_info(TAG, "TX test: rs485_send(hello) = %ld (expect %u)",
                      (long)r, (unsigned)(sizeof hello - 1U));
-            log_info(TAG, "RX pin PC7: now=%d lo=%lu hi=%lu edges=%lu (since boot, ~1 ms samples)",
+            log_info(TAG, "RX pin PE2: now=%d lo=%lu hi=%lu edges=%lu (since boot, ~1 ms samples)",
                      (int)rxpin_prev, (unsigned long)rxpin_lo, (unsigned long)rxpin_hi,
                      (unsigned long)rxpin_edges);
 #if GW_RS485_DIAG_CAPTURE
