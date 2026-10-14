@@ -34,10 +34,10 @@
 
 /* RX pin of the diag port (USART6_RX = PC7), read as a plain input level. */
 #ifndef GW_RS485_DIAG_RXPIN_PORT
-#define GW_RS485_DIAG_RXPIN_PORT    GPIOC
+#define GW_RS485_DIAG_RXPIN_PORT    GPIOE
 #endif
 #ifndef GW_RS485_DIAG_RXPIN_PIN
-#define GW_RS485_DIAG_RXPIN_PIN     GPIO_PIN_7
+#define GW_RS485_DIAG_RXPIN_PIN     GPIO_PIN_4
 #endif
 
 /* Bring-up only: software logic analyzer on the RX pin. After each TX test it waits (max
@@ -201,7 +201,7 @@ static void gw_rs485_diag_capture_and_log(void)
     const uint16_t n = gw_rs485_diag_capture(runs, GW_RS485_DIAG_CAP_MAX_RUNS, &overflow);
 
     if (n == 0U) {
-        log_info(TAG, "CAP: no falling edge on PC7 within %u ms", (unsigned)GW_RS485_DIAG_CAP_WAIT_MS);
+        log_info(TAG, "CAP: no falling edge on PE4 within %u ms", (unsigned)GW_RS485_DIAG_CAP_WAIT_MS);
         return;
     }
     log_info(TAG, "CAP: %u runs in %u us window%s (first run = LOW, then alternating; values in us, 1 bit = 8.7 us)",
