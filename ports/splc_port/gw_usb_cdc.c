@@ -46,13 +46,28 @@ static void gw_usb_cdc_task(void *arg)
 {
     (void)arg;
 
+    /* PA11 (D-) / PA12 (D+) must be left to the USB transceiver. MX_GPIO_Init()
+     * (CubeMX file, not edited) configures them as AF push-pull, which makes the
+     * GPIO output drivers fight the USB PHY on the data lines. The Zigbee-IO
+     * board, where SimplePLC's own USB-CDC module is proven on hardware, never
+     * configures these pins (reset state = analog), so restore that state here. */
+    {
+        GPIO_InitTypeDef usb_pins = {0};
+        usb_pins.Pin  = GPIO_PIN_11 | GPIO_PIN_12;
+        usb_pins.Mode = GPIO_MODE_ANALOG;
+        usb_pins.Pull = GPIO_NOPULL;
+        HAL_GPIO_Init(GPIOA, &usb_pins);
+    }
+
     /* Clock (HSI48), VDDUSB and NVIC; clears g_usb_tusb_initialized. */
     MX_USB_TinyUSB_Init();
 
     const tusb_rhport_init_t dev_init =
     {
         .role  = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_AUTO
+        /* USB_DRD_FS is Full-Speed only on STM32H5; SimplePLC's proven module uses
+         * TUSB_SPEED_FULL too (TUSB_SPEED_AUTO left this ambiguous). */
+        .speed = TUSB_SPEED_FULL
     };
     if (!tusb_init(BOARD_TUD_RHPORT, &dev_init))
     {
