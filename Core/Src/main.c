@@ -67,7 +67,26 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define SYSTEM_BOOTLOADER_ADDRESS 0x0BF97000
 
+static void enter_bootloader_mode(void) {
+  // printf("Gonna Jump to Application 0x%08X\r\n",APPLICATION_ADDRESS);
+  void (*app_reset_handler)(void) = (void *)(*((volatile uint32_t *)(SYSTEM_BOOTLOADER_ADDRESS + 4U)));
+  // __set_MSP(*(volatile uint32_t*) 0x08040000);
+  // Turn OFF the Green Led to tell the user that Bootloader is not running
+  // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET );    //Green LED OFF
+  __disable_irq();
+  
+  SysTick->CTRL = 0;
+  SysTick->LOAD = 0;
+  SysTick->VAL = 0;
+  
+  __set_MSP(*(volatile uint32_t *)SYSTEM_BOOTLOADER_ADDRESS);
+  /* Jump to application */
+  SCB->VTOR = SYSTEM_BOOTLOADER_ADDRESS;
+  __enable_irq();
+  app_reset_handler(); // call the app reset handler
+}
 /* USER CODE END 0 */
 
 /**
@@ -122,6 +141,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
   MX_USART10_UART_Init();
+  
 #if GW_USB_NETIF_ENABLE
   MX_USB_TinyUSB_Init();
 #endif
@@ -142,6 +162,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  enter_bootloader_mode();
   while (1)
   {
     /* USER CODE END WHILE */
