@@ -312,7 +312,7 @@ static void splc_task(void *arg)
         }
         plc_engine_poll();
         splc_mqtt_port_poll((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-        gw_rs485_diag_poll(1U);
+        // gw_rs485_diag_poll(GW_RS485_DIAG_PORT);   /* USART3 hardware test; remove when done */
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
