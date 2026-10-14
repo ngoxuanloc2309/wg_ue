@@ -55,7 +55,9 @@
  * USART6 = index 1, chosen by the user for the rule-upload test.
  * Remove the line (or set -1) to get the USB CDC App link back; with RS485 the
  * firmware must be configured with -DGW_USB_CDC_ENABLE=OFF. */
-#define SPLC_HOST_APP_RS485_PORT      1          /* USART6 */
-#define SPLC_HOST_APP_RS485_BAUD      115200U    /* PC side: same baud, 8N1 */
+/* USB CDC App link (GW_USB_CDC_ENABLE=ON): RS485 App link disabled.
+ * Re-enable the two lines below (and build with -DGW_USB_CDC_ENABLE=OFF) to go back to RS485. */
+/* #define SPLC_HOST_APP_RS485_PORT   1 */   /* USART6 */
+/* #define SPLC_HOST_APP_RS485_BAUD   115200U */
 
 #endif /* SPLCOPTS_H */
