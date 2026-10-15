@@ -96,12 +96,12 @@ static void gw_usb_cdc_task(void *arg)
      * the HAL powers up and resets the USB_DRD_FS core, then TinyUSB takes over.
      * HAL_PCD_MspInit() here does not enable the NVIC, so no interrupt can reach
      * tud_int_handler() before tusb_init() below. */
-    // MX_USB_PCD_Init();
+    MX_USB_PCD_Init();
     LOGI(TAG, "HAL_PCD_Init done");
 #endif
 
     /* Clock (HSI48), VDDUSB and NVIC; clears g_usb_tusb_initialized. */
-    // MX_USB_TinyUSB_Init();
+    MX_USB_TinyUSB_Init();
 
     const tusb_rhport_init_t dev_init =
     {

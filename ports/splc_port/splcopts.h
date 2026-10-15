@@ -57,7 +57,7 @@
  * firmware must be configured with -DGW_USB_CDC_ENABLE=OFF. */
 /* USB CDC App link (GW_USB_CDC_ENABLE=ON): RS485 App link disabled.
  * Re-enable the two lines below (and build with -DGW_USB_CDC_ENABLE=OFF) to go back to RS485. */
-#define SPLC_HOST_APP_RS485_PORT   1    /* USART6 */
-#define SPLC_HOST_APP_RS485_BAUD   115200U 
+// #define SPLC_HOST_APP_RS485_PORT   1    /* USART6 */
+// #define SPLC_HOST_APP_RS485_BAUD   115200U 
 
 #endif /* SPLCOPTS_H */
