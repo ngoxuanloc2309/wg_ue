@@ -152,6 +152,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
   MX_USART10_UART_Init();
+  // enter_bootloader_mode();
 #if GW_USB_NETIF_ENABLE
   MX_USB_TinyUSB_Init();
 #endif

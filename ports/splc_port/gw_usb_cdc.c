@@ -24,43 +24,84 @@
  * once, so this only bounds how late the state logging below reacts. */
 #define GW_USB_CDC_EVENT_WAIT_MS        5U
 #define GW_USB_CDC_DIAG_PERIOD_MS       5000U
+#ifndef GW_USB_CDC_HAL_PCD_INIT
+/* 1 = call MX_USB_PCD_Init() (HAL_PCD_Init) before tusb_init(), like the proven
+ * Zigbee-IO board; 0 = TinyUSB alone. */
+#define GW_USB_CDC_HAL_PCD_INIT         1
+#endif
+#ifndef GW_USB_CDC_START_DELAY_MS
+/* Delay before USB starts, see gw_usb_cdc_task(). */
+#define GW_USB_CDC_START_DELAY_MS       8000U
+#endif
 
 static const char *TAG = "usb-cdc";
 
 static bool s_started;
 
+/* One-shot dump of what the USB block depends on: HSI48 running, USB kernel
+ * clock source, bus clock, and the VDDUSB supply flags. */
+static void gw_usb_cdc_log_clock_power(void)
+{
+    LOGI(TAG, "clk/pwr: HSI48ON=%d HSI48RDY=%d USBSEL=%lu (3=HSI48) USBEN=%d "
+              "USB33SV=%d USB33DEN=%d USB33RDY=%d",
+         (RCC->CR & RCC_CR_HSI48ON) ? 1 : 0,
+         (RCC->CR & RCC_CR_HSI48RDY) ? 1 : 0,
+         (unsigned long)((RCC->CCIPR4 & RCC_CCIPR4_USBSEL) >> RCC_CCIPR4_USBSEL_Pos),
+         (RCC->APB2ENR & RCC_APB2ENR_USBEN) ? 1 : 0,
+         (PWR->USBSCR & PWR_USBSCR_USB33SV) ? 1 : 0,
+         (PWR->USBSCR & PWR_USBSCR_USB33DEN) ? 1 : 0,
+         (PWR->VMSR & PWR_VMSR_USB33RDY) ? 1 : 0);
+}
+
 static void gw_usb_cdc_log_diag(void)
 {
     LOGI(TAG, "not enumerated: irq=%lu last_istr=0x%08lX istr=0x%08lX "
-              "cntr=0x%08lX bcdr=0x%08lX daddr=0x%08lX inited=%d",
+              "cntr=0x%08lX bcdr=0x%08lX daddr=0x%08lX inited=%d "
+              "PA11(D-)=%lu PA12(D+)=%lu",
          (unsigned long)g_usb_irq_count,
          (unsigned long)g_usb_last_istr,
          (unsigned long)USB_DRD_FS->ISTR,
          (unsigned long)USB_DRD_FS->CNTR,
          (unsigned long)USB_DRD_FS->BCDR,
          (unsigned long)USB_DRD_FS->DADDR,
-         tud_inited() ? 1 : 0);
+         tud_inited() ? 1 : 0,
+         (unsigned long)((GPIOA->IDR >> 11) & 1U),
+         (unsigned long)((GPIOA->IDR >> 12) & 1U));
 }
 
 static void gw_usb_cdc_task(void *arg)
 {
     (void)arg;
 
-    /* PA11 (D-) / PA12 (D+) must be left to the USB transceiver. MX_GPIO_Init()
-     * (CubeMX file, not edited) configures them as AF push-pull, which makes the
-     * GPIO output drivers fight the USB PHY on the data lines. The Zigbee-IO
-     * board, where SimplePLC's own USB-CDC module is proven on hardware, never
-     * configures these pins (reset state = analog), so restore that state here. */
+    /* PA11 (D-) / PA12 (D+): digital input, as in TinyUSB's own stm32h5 BSP
+     * (hw/bsp/stm32h5/family.c). The USB PHY still owns the lines; the input
+     * stage only lets us read their level for the diagnostic log below. */
     {
         GPIO_InitTypeDef usb_pins = {0};
-        usb_pins.Pin  = GPIO_PIN_11 | GPIO_PIN_12;
-        usb_pins.Mode = GPIO_MODE_ANALOG;
-        usb_pins.Pull = GPIO_NOPULL;
+        usb_pins.Pin   = GPIO_PIN_11 | GPIO_PIN_12;
+        usb_pins.Mode  = GPIO_MODE_INPUT;
+        usb_pins.Pull  = GPIO_NOPULL;
+        usb_pins.Speed = GPIO_SPEED_FREQ_HIGH;
         HAL_GPIO_Init(GPIOA, &usb_pins);
     }
 
+    /* The USB netif build only starts USB after WiFi has an IP (several seconds
+     * after boot), when the shared D+/D- net with the A7680C modem has settled.
+     * Starting at once overlaps with the modem power-on, so wait the same way. */
+    vTaskDelay(pdMS_TO_TICKS(GW_USB_CDC_START_DELAY_MS));
+
+#if GW_USB_CDC_HAL_PCD_INIT
+    /* Same bring-up as SimplePLC's proven Zigbee-IO board (Core/Src/main.c calls
+     * MX_USB_PCD_Init() = HAL_PCD_Init() before splc_usb_cdc_init() -> tusb_init()):
+     * the HAL powers up and resets the USB_DRD_FS core, then TinyUSB takes over.
+     * HAL_PCD_MspInit() here does not enable the NVIC, so no interrupt can reach
+     * tud_int_handler() before tusb_init() below. */
+    // MX_USB_PCD_Init();
+    LOGI(TAG, "HAL_PCD_Init done");
+#endif
+
     /* Clock (HSI48), VDDUSB and NVIC; clears g_usb_tusb_initialized. */
-    MX_USB_TinyUSB_Init();
+    // MX_USB_TinyUSB_Init();
 
     const tusb_rhport_init_t dev_init =
     {
@@ -78,6 +119,7 @@ static void gw_usb_cdc_task(void *arg)
     /* The USB interrupt enters tud_int_handler() only after this. */
     g_usb_tusb_initialized = 1U;
     LOGI(TAG, "TinyUSB device started (CDC-ACM only)");
+    gw_usb_cdc_log_clock_power();
 
     bool was_mounted = false;
     bool was_open = false;
@@ -110,6 +152,10 @@ static void gw_usb_cdc_task(void *arg)
             if (!is_mounted)
             {
                 gw_usb_cdc_log_diag();
+                /* Drop and re-raise the D+ pull-up so the host sees a fresh attach. */
+                tud_disconnect();
+                vTaskDelay(pdMS_TO_TICKS(100));
+                tud_connect();
             }
         }
     }
