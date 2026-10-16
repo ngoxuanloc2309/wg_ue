@@ -22,7 +22,8 @@
 /* The host runs FreeRTOS; splc_port.c creates the single engine task. */
 #define SX_OS_USE_FREERTOS            1
 
-/* The host owns USB (usb_netif.c: TinyUSB + descriptors + ISR). */
+/* The host owns USB (ports/splc_port/gw_usb_cdc.c: TinyUSB CDC-ACM; usb_netif.c in
+ * the GW_USB_NETIF_ENABLE build), not SimplePLC's own port/usb. */
 #define SPLC_PORT_USB_CDC             0
 
 /* Log through the host's libs/logger (LOGx macros / log_func). */
@@ -45,19 +46,15 @@
 #define SPLC_MQTT_ENABLE              1
 
 /* ---- options of ports/splc_port (defaults in splc_port.h) ---------------- */
-#define SPLC_HOST_RS485_PORT          2          /* USART3: I/O boards bus */
+
+/* Master bus to the I/O boards: host RS485 port 1 = USART6 (RX PC7, DE PC8).
+ * Port numbering of Drivers/uart/rs485_driver.h: 0 = USART3, 1 = USART6, 2 = USART10. */
+#define SPLC_HOST_RS485_PORT          1
 #define SPLC_HOST_RS485_BAUD          115200U    /* ASSUMED: I/O board baud, to be confirmed */
 
-/* App link (SimplePLC.Studio / test scripts) over RS485 instead of USB: the PC
- * reaches the gateway through a USB-RS485 dongle wired to this host RS485 port
- * (0 = USART3, 1 = USART6, 2 = USART10). It must NOT be the I/O boards port above
- * and must not be given to a host service (modbus_master / serial_tcp_server).
- * USART6 = index 1, chosen by the user for the rule-upload test.
- * Remove the line (or set -1) to get the USB CDC App link back; with RS485 the
- * firmware must be configured with -DGW_USB_CDC_ENABLE=OFF. */
-/* USB CDC App link (GW_USB_CDC_ENABLE=ON): RS485 App link disabled.
- * Re-enable the two lines below (and build with -DGW_USB_CDC_ENABLE=OFF) to go back to RS485. */
-// #define SPLC_HOST_APP_RS485_PORT   1    /* USART6 */
-// #define SPLC_HOST_APP_RS485_BAUD   115200U 
+/* App link (SimplePLC.Studio) = USB CDC (build with GW_USB_CDC_ENABLE=ON): do not define
+ * SPLC_HOST_APP_RS485_PORT (default -1). To carry the App over a second RS485 port
+ * instead, define SPLC_HOST_APP_RS485_PORT / SPLC_HOST_APP_RS485_BAUD to a port that is
+ * not SPLC_HOST_RS485_PORT, and build with -DGW_USB_CDC_ENABLE=OFF. */
 
 #endif /* SPLCOPTS_H */
