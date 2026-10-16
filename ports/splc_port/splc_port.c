@@ -8,8 +8,8 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
-#if !SPLC_HOST_APP_LINK_RS485
-#include "tusb.h"
+#if !SPLC_HOST_APP_LINK_RS485 && !GW_USB_CDC_ENABLE
+#include "tusb.h"   /* NETIF build: usb_netif_task owns USB, the pipe below uses tud_*() */
 #endif
 #include "rs485_driver.h"
 
@@ -29,7 +29,7 @@
 
 static const char *TAG = "SPLC_PORT";
 
-#if !SPLC_HOST_APP_LINK_RS485
+#if !SPLC_HOST_APP_LINK_RS485 && !GW_USB_CDC_ENABLE
 /* The CDC-ACM is the only CDC class instance of the host's descriptor
  * (ports/usb_port/Target/usb_descriptors.c, or usb_descriptors_cdc.c with
  * GW_USB_CDC_ENABLE); the network function is RNDIS / ECM / NCM, not a CDC
@@ -40,7 +40,7 @@ static const char *TAG = "SPLC_PORT";
  * (Core/Src/usb.c).
  * Until then no tud_*() call is allowed. */
 extern volatile uint8_t g_usb_tusb_initialized;
-#endif /* !SPLC_HOST_APP_LINK_RS485 */
+#endif /* !SPLC_HOST_APP_LINK_RS485 && !GW_USB_CDC_ENABLE */
 
 #define SPLC_PORT_CHECK_MS      1000U
 
@@ -196,8 +196,21 @@ static splc_port_watch_t s_app_watch = {
     .port = (uint8_t)SPLC_HOST_APP_RS485_PORT, .baud = SPLC_HOST_APP_RS485_BAUD,
     .parity = (uint8_t)SPLC_HOST_APP_RS485_PARITY, .name = "App link", .last_problem = -1,
 };
+#define app_link_output   app_output
+#define app_link_process  app_process
 
-#else /* USB CDC */
+#elif GW_USB_CDC_ENABLE
+/* ------------------------------------------------------------------------ */
+/* App link: modbus_link ops on top of gw_usb_cdc.c (the CDC-only USB owner)  */
+/* ------------------------------------------------------------------------ */
+
+/* The whole pipe lives in gw_usb_cdc.c, like splc_usb_cdc.c does for SimplePLC's
+ * own USB module: this file only registers gw_usb_cdc_output / gw_usb_cdc_process
+ * with modbus_link (see splc_host_start()). */
+#define app_link_output   gw_usb_cdc_output
+#define app_link_process  gw_usb_cdc_process
+
+#else /* USB CDC through usb_netif_task (GW_USB_NETIF_ENABLE) */
 /* ------------------------------------------------------------------------ */
 /* App link: modbus_link ops on top of TinyUSB CDC instance 0                */
 /* ------------------------------------------------------------------------ */
@@ -242,6 +255,8 @@ static int32_t cdc_output(const uint8_t *buf, uint16_t len, void *ctx)
     (void)tud_cdc_n_write_flush(SPLC_CDC_ITF);
     return (int32_t)n;   /* 0 = FIFO full, the core retries */
 }
+#define app_link_output   cdc_output
+#define app_link_process  cdc_process
 #endif /* SPLC_HOST_APP_LINK_RS485 */
 
 /* ------------------------------------------------------------------------ */
@@ -339,13 +354,8 @@ bool splc_host_start(void)
 
     const splc_link_ops_t ops = {
         .ctx     = NULL,
-#if SPLC_HOST_APP_LINK_RS485
-        .output  = app_output,
-        .process = app_process,
-#else
-        .output  = cdc_output,
-        .process = cdc_process,
-#endif
+        .output  = app_link_output,
+        .process = app_link_process,
         .kind    = MODBUS_TRANSPORT_KIND_RTU,
         .unit_id = (uint8_t)SPLC_MODBUS_UNIT_ID,
     };
