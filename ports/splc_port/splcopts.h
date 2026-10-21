@@ -57,4 +57,5 @@
  * instead, define SPLC_HOST_APP_RS485_PORT / SPLC_HOST_APP_RS485_BAUD to a port that is
  * not SPLC_HOST_RS485_PORT, and build with -DGW_USB_CDC_ENABLE=OFF. */
 
+#define SPLC_MBM_ENABLE 1
 #endif /* SPLCOPTS_H */
