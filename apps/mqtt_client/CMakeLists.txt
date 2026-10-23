@@ -13,3 +13,10 @@ target_link_libraries(apps_mqtt_client PUBLIC
     stm32cubemx
     middleware_lwip
 )
+
+# SPLC_MQTT_SUB_ENABLE (SimplePLC MQTT Subscribe hooks in mqtt_client.c) comes from the
+# product's splcopts.h through the library's option header; only these two paths are needed.
+target_include_directories(apps_mqtt_client PRIVATE
+    ${CMAKE_SOURCE_DIR}/ports/splc_port
+    ${CMAKE_SOURCE_DIR}/libs/simple_plc/config
+)

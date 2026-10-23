@@ -24,6 +24,8 @@ target_sources(ports_splc_port PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_mqtt_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_modbus_tcp_port.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/splc_rs485_bus.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/splc_wifi_port.c
        ${CMAKE_CURRENT_SOURCE_DIR}/gw_rs485_diag.c
 )
 # CDC-only USB device: this port owns the USB peripheral (GW_USB_CDC_ENABLE).
@@ -45,5 +47,8 @@ target_link_libraries(ports_splc_port PUBLIC
     drivers_uart    # rs485_driver.h
     logger
     apps_mqtt_client   # mqtt_client.h: publish_ex + broker override (splc_mqtt_port.c)
-    apps_settings      # config_manager.h: g_sys_config (device_id)
+    apps_settings      # config_manager.h: g_sys_config (device_id), config_save()
+    network_network_manager   # network_interface_*(), Wi-Fi settings (splc_wifi_port.c)
+    network_wifi_netif        # wifi_netif_apply_config()
+    st67w611                  # st67w611_scan()
 )

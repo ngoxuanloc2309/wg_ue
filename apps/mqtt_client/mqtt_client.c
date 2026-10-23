@@ -14,8 +14,11 @@
 #include "event_groups.h"
 #include "app_config.h"
 #include "semphr.h"
+#include "queue.h"
+#include <string.h>
 #include "network_manager.h"
 #include "wifi_driver.h"
+#include "splc_opt.h"            /* SPLC_MQTT_SUB_ENABLE (ports/splc_port/splcopts.h) */
 
 static const char *TAG = "MQTT_Client";
 static mqtt_client_t *s_mqtt_client = NULL;
@@ -250,6 +253,128 @@ static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *callba
 }
 
 
+#if SPLC_MQTT_SUB_ENABLE
+/* ---- SimplePLC port: MQTT Subscribe ------------------------------------------
+ * Wanted set: written by the engine task (critical section), read on the tcpip thread. What lwIP
+ * actually holds (s_sub_active) and the receive staging buffers are touched on the tcpip thread
+ * only. Messages go to a queue the engine task drains (mqtt_client_sub_poll). */
+static mqtt_client_sub_t s_sub_want[MQTT_CLIENT_SUB_MAX];
+static mqtt_client_sub_t s_sub_active[MQTT_CLIENT_SUB_MAX];
+static QueueHandle_t     s_rx_queue = NULL;
+static volatile uint32_t s_rx_dropped = 0U;
+static mqtt_client_rx_t  s_rx_item;          /* the message being assembled */
+static bool              s_rx_drop = false;
+
+static bool sub_same(const mqtt_client_sub_t *a, const mqtt_client_sub_t *b)
+{
+    return a->used && b->used && a->qos == b->qos && strcmp(a->topic, b->topic) == 0;
+}
+
+static void mqtt_sub_result_cb(void *arg, err_t err)
+{
+    (void)arg;
+    if (err != ERR_OK) {
+        LOGW(TAG, "MQTT (un)subscribe refused: %d", (int)err);
+    }
+}
+
+/* tcpip thread. Brings lwIP in line with the wanted set. */
+static void mqtt_sub_apply_cb(void *arg)
+{
+    mqtt_client_sub_t want[MQTT_CLIENT_SUB_MAX];
+    (void)arg;
+    taskENTER_CRITICAL();
+    memcpy(want, s_sub_want, sizeof(want));
+    taskEXIT_CRITICAL();
+
+    if (s_mqtt_client == NULL || !s_mqtt_connected) {
+        memset(s_sub_active, 0, sizeof(s_sub_active));
+        return;
+    }
+    for (unsigned i = 0U; i < MQTT_CLIENT_SUB_MAX; i++) {
+        bool keep = false;
+        for (unsigned j = 0U; j < MQTT_CLIENT_SUB_MAX; j++) {
+            keep = keep || sub_same(&s_sub_active[i], &want[j]);
+        }
+        if (s_sub_active[i].used && !keep) {
+            (void)mqtt_unsubscribe(s_mqtt_client, s_sub_active[i].topic, mqtt_sub_result_cb, NULL);
+        }
+    }
+    for (unsigned j = 0U; j < MQTT_CLIENT_SUB_MAX; j++) {
+        bool have = false;
+        for (unsigned i = 0U; i < MQTT_CLIENT_SUB_MAX; i++) {
+            have = have || sub_same(&s_sub_active[i], &want[j]);
+        }
+        if (want[j].used && !have) {
+            if (mqtt_subscribe(s_mqtt_client, want[j].topic, want[j].qos, mqtt_sub_result_cb, NULL) != ERR_OK) {
+                LOGW(TAG, "MQTT subscribe could not be queued: %s", want[j].topic);
+                want[j].used = false;       /* tried again at the next change / reconnect */
+            } else {
+                LOGI(TAG, "MQTT subscribe %s (qos %u)", want[j].topic, (unsigned)want[j].qos);
+            }
+        }
+    }
+    memcpy(s_sub_active, want, sizeof(s_sub_active));
+}
+
+/* After every connect lwIP holds nothing: forget what we thought was subscribed, apply again. */
+static void mqtt_sub_on_connected(void)
+{
+    memset(s_sub_active, 0, sizeof(s_sub_active));
+    (void)tcpip_try_callback(mqtt_sub_apply_cb, NULL);
+}
+
+static void mqtt_inpub_cb(void *arg, const char *topic, u32_t tot_len)
+{
+    (void)arg;
+    s_rx_drop = (tot_len > MQTT_CLIENT_RX_PAYLOAD_LEN) || (strlen(topic) >= MQTT_CLIENT_RX_TOPIC_LEN);
+    s_rx_item.len = 0U;
+    if (!s_rx_drop) {
+        strcpy(s_rx_item.topic, topic);
+    }
+}
+
+static void mqtt_indata_cb(void *arg, const u8_t *data, u16_t len, u8_t flags)
+{
+    (void)arg;
+    if (!s_rx_drop) {
+        if ((uint32_t)s_rx_item.len + len <= MQTT_CLIENT_RX_PAYLOAD_LEN) {
+            memcpy(&s_rx_item.payload[s_rx_item.len], data, len);
+            s_rx_item.len = (uint16_t)(s_rx_item.len + len);
+        } else {
+            s_rx_drop = true;
+        }
+    }
+    if ((flags & MQTT_DATA_FLAG_LAST) != 0U) {
+        if (s_rx_drop || s_rx_queue == NULL || xQueueSend(s_rx_queue, &s_rx_item, 0) != pdTRUE) {
+            s_rx_dropped++;
+        }
+        s_rx_drop = false;
+        s_rx_item.len = 0U;
+    }
+}
+
+void mqtt_client_set_subscriptions(const mqtt_client_sub_t subs[MQTT_CLIENT_SUB_MAX])
+{
+    taskENTER_CRITICAL();
+    memcpy(s_sub_want, subs, sizeof(s_sub_want));
+    taskEXIT_CRITICAL();
+    if (s_mqtt_client != NULL && s_mqtt_connected) {
+        (void)tcpip_try_callback(mqtt_sub_apply_cb, NULL);
+    }
+}
+
+bool mqtt_client_sub_poll(mqtt_client_rx_t *out)
+{
+    return s_rx_queue != NULL && out != NULL && xQueueReceive(s_rx_queue, out, 0) == pdTRUE;
+}
+
+uint32_t mqtt_client_sub_dropped(void)
+{
+    return s_rx_dropped;
+}
+#endif /* SPLC_MQTT_SUB_ENABLE */
+
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
     mqtt_connect_command_t *attempt = (mqtt_connect_command_t *)arg;
     if (attempt == NULL || attempt->attempt_epoch != s_mqtt_active_attempt_epoch ||
@@ -283,6 +408,9 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
         s_mqtt_state = MQTT_STATE_CONNECTED;
         s_mqtt_connect_attempt = 0U;
         (void)tcpip_try_callback(mqtt_flush_offline_cb, NULL);
+#if SPLC_MQTT_SUB_ENABLE
+        mqtt_sub_on_connected();
+#endif
     } else {
         bool expected = s_mqtt_disconnect_expected;
         s_mqtt_disconnect_expected = false;
@@ -842,6 +970,13 @@ void mqtt_client_init(void) {
         LOGE(TAG, "Failed to create MQTT client");
         return;
     }
+#if SPLC_MQTT_SUB_ENABLE
+    s_rx_queue = xQueueCreate(2U, sizeof(mqtt_client_rx_t));
+    if (s_rx_queue == NULL) {
+        LOGE(TAG, "Failed to create MQTT receive queue");
+    }
+    mqtt_set_inpub_callback(s_mqtt_client, mqtt_inpub_cb, mqtt_indata_cb, NULL);
+#endif
     s_offline_mutex = xSemaphoreCreateMutex();
     if (s_offline_mutex == NULL) {
         LOGE(TAG, "Failed to create MQTT offline queue mutex");

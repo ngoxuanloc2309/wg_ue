@@ -46,4 +46,34 @@ uint32_t mqtt_client_connected_override_generation(void);
 int mqtt_client_publish_ex(const char *topic, const char *payload,
                            uint8_t qos, bool retain);
 
+
+/* ---- SimplePLC port hooks: MQTT Subscribe (ports/splc_port/splc_mqtt_port.c) -------
+ * The App's subscription blocks (0x0D80) name up to MQTT_CLIENT_SUB_MAX topics. The client
+ * (re)subscribes them after every connect and whenever the set changes; incoming messages are
+ * copied into a small queue (lwIP calls the callbacks on the tcpip thread) that the SimplePLC
+ * engine task drains with mqtt_client_sub_poll(). lwIP does not report the RETAIN flag. */
+#define MQTT_CLIENT_SUB_MAX            2U
+#define MQTT_CLIENT_SUB_TOPIC_LEN      33U     /* 32 characters + NUL (PLC_MQTT_SUB_TOPIC_MAX) */
+#define MQTT_CLIENT_RX_TOPIC_LEN       96U
+#define MQTT_CLIENT_RX_PAYLOAD_LEN     128U    /* the library keeps at most 128 B per message */
+
+typedef struct {
+    bool    used;
+    uint8_t qos;
+    char    topic[MQTT_CLIENT_SUB_TOPIC_LEN];
+} mqtt_client_sub_t;
+
+typedef struct {
+    char     topic[MQTT_CLIENT_RX_TOPIC_LEN];
+    uint8_t  payload[MQTT_CLIENT_RX_PAYLOAD_LEN];
+    uint16_t len;
+} mqtt_client_rx_t;
+
+/* Safe from any task. Replaces the wanted set; applied at once when connected. */
+void mqtt_client_set_subscriptions(const mqtt_client_sub_t subs[MQTT_CLIENT_SUB_MAX]);
+/* Copy the oldest queued message into *out. false = none. Never blocks. */
+bool mqtt_client_sub_poll(mqtt_client_rx_t *out);
+/* Messages dropped (queue full, or longer than MQTT_CLIENT_RX_PAYLOAD_LEN). */
+uint32_t mqtt_client_sub_dropped(void);
+
 #endif /* __MQTT_CLIENT_H__ */

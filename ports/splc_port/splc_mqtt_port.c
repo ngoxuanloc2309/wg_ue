@@ -20,6 +20,9 @@
 #include <string.h>
 
 #include "plc_mqtt.h"
+#if SPLC_MQTT_SUB_ENABLE
+#include "plc_mqtt_sub.h"
+#endif
 #include "mqtt_client.h"
 #include "config_manager.h"   /* g_sys_config, sys_config_lock() */
 #include "splc_log.h"
@@ -41,6 +44,10 @@ static bool     s_have_reconnect;
 static uint32_t s_last_reconnect_ms;
 static bool     s_warned_gen_valid;
 static uint32_t s_warned_gen;
+#if SPLC_MQTT_SUB_ENABLE
+static bool     s_sub_pushed;
+static uint32_t s_sub_pushed_gen;
+#endif
 
 /* ---- publish callback ---------------------------------------------------- */
 
@@ -80,6 +87,41 @@ static uint16_t map_last_error(bool connected)
     }
 }
 
+#if SPLC_MQTT_SUB_ENABLE
+/* ---- MQTT Subscribe -------------------------------------------------------- */
+
+/* Library -> host: the topics the App configured (re-read when splc_mqtt_sub_generation()
+ * changes: COMMIT, Flash load, clear). The client subscribes them after every connect. */
+static void sub_push_topics(void)
+{
+    mqtt_client_sub_t subs[MQTT_CLIENT_SUB_MAX];
+    memset(subs, 0, sizeof(subs));
+    for (uint8_t i = 0U; i < PLC_MQTT_SUB_BLOCKS && i < MQTT_CLIENT_SUB_MAX; i++) {
+        char topic[PLC_MQTT_SUB_TOPIC_MAX + 1U];
+        uint8_t qos = 0U;
+        if (splc_mqtt_sub_get(i, topic, &qos)) {
+            subs[i].used = true;
+            subs[i].qos = (qos <= 1U) ? qos : 1U;     /* lwIP client: QoS 2 is not supported for SUB here */
+            strncpy(subs[i].topic, topic, sizeof(subs[i].topic) - 1U);
+            if (qos > 1U) {
+                log_warn(TAG, "SUB block %u asks QoS 2: subscribed with QoS 1", (unsigned)i + 1U);
+            }
+        }
+    }
+    mqtt_client_set_subscriptions(subs);
+}
+
+/* Host -> library: hand over every message the client queued (engine task only). */
+static void sub_drain_messages(void)
+{
+    mqtt_client_rx_t m;
+    /* A few per call: the queue is small and the library applies one message per call anyway. */
+    for (unsigned n = 0U; n < 4U && mqtt_client_sub_poll(&m); n++) {
+        (void)splc_mqtt_input(m.topic, (const char *)m.payload, m.len, false);
+    }
+}
+#endif /* SPLC_MQTT_SUB_ENABLE */
+
 /* ---- public -------------------------------------------------------------- */
 
 void splc_mqtt_port_init(void)
@@ -101,6 +143,9 @@ void splc_mqtt_port_init(void)
 
 void splc_mqtt_port_poll(uint32_t now_ms)
 {
+#if SPLC_MQTT_SUB_ENABLE
+    sub_drain_messages();                /* cheap: one queue peek when nothing arrived */
+#endif
     if (s_have_pump && (uint32_t)(now_ms - s_last_pump_ms) < PUMP_PERIOD_MS) return;
     s_have_pump = true;
     s_last_pump_ms = now_ms;
@@ -135,6 +180,15 @@ void splc_mqtt_port_poll(uint32_t now_ms)
         s_pushed = true;
         s_pushed_gen = gen;
     }
+
+#if SPLC_MQTT_SUB_ENABLE
+    const uint32_t sub_gen = splc_mqtt_sub_generation();
+    if (!s_sub_pushed || sub_gen != s_sub_pushed_gen) {
+        sub_push_topics();
+        s_sub_pushed = true;
+        s_sub_pushed_gen = sub_gen;
+    }
+#endif
 
     /* 2. Status host -> library. generation = the config the LIVE connection was
      * built from, so the library publishes only when it matches its own. */

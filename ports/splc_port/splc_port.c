@@ -16,6 +16,8 @@
 #include "plc_engine.h"
 #include "splc_mqtt_port.h"
 #include "splc_modbus_tcp_port.h"
+#include "splc_rs485_bus.h"
+#include "splc_wifi_port.h"
 #include "modbus_link.h"
 #include "modbus_serial.h"
 #include "sx_rtc.h"
@@ -49,29 +51,12 @@ extern volatile uint8_t g_usb_tusb_initialized;
 /* RS485: modbus_serial_port_t on top of the host driver                     */
 /* ------------------------------------------------------------------------ */
 
-/* Non-blocking read. NOTE: rs485_recv_polling() counts every empty read in
- * counters.timeouts of this port (host driver behaviour, left untouched), so
- * that counter is meaningless for the SimplePLC port. */
-static int rs485_read_cb(void *ctx, uint8_t *buf, uint16_t max_len)
-{
-    (void)ctx;
-    int32_t n = rs485_recv_polling((uint8_t)SPLC_HOST_RS485_PORT, buf, max_len, 0U);
-    return (n > 0) ? (int)n : 0;
-}
+/* The I/O boards bus (Remote I/O master) and the MB_READ / MB_WRITE ports are served by
+ * splc_rs485_bus.c, which also arbitrates a UART they share. This file keeps the App link
+ * port (SPLC_HOST_APP_RS485_PORT) below. */
 
-/* rs485_send() drives DE itself and returns after the last bit left the UART
- * (it waits for TC), which is exactly the contract of modbus_serial_port_t.
- * Its own timeout (1 s) is fixed inside the driver, so timeout_ms is unused. */
-static int rs485_write_cb(void *ctx, const uint8_t *buf, uint16_t len, uint32_t timeout_ms)
-{
-    (void)ctx;
-    (void)timeout_ms;
-    int32_t n = rs485_send((uint8_t)SPLC_HOST_RS485_PORT, buf, len);
-    return (n == (int32_t)len) ? 0 : -1;
-}
-
-/* One RS485 port this file keeps ours: the I/O boards bus, and the App link
- * port when SPLC_HOST_APP_RS485_PORT is used. */
+#if SPLC_HOST_APP_LINK_RS485
+/* The App link RS485 port this file keeps ours (SPLC_HOST_APP_RS485_PORT). */
 typedef struct {
     uint8_t     port;
     uint32_t    baud;
@@ -142,10 +127,7 @@ static void splc_check_port(splc_port_watch_t *w)
     }
 }
 
-static splc_port_watch_t s_io_watch = {
-    .port = (uint8_t)SPLC_HOST_RS485_PORT, .baud = SPLC_HOST_RS485_BAUD,
-    .parity = (uint8_t)SPLC_HOST_RS485_PARITY, .name = "I/O boards", .last_problem = -1,
-};
+#endif /* SPLC_HOST_APP_LINK_RS485 */
 
 #if SPLC_HOST_APP_LINK_RS485
 /* ------------------------------------------------------------------------ */
@@ -317,6 +299,7 @@ static void splc_task(void *arg)
 
     splc_mqtt_port_init();   /* publish callback; must precede plc_engine_init() */
     plc_engine_init();   /* board_hw_init() builds the virtual I/O from the port */
+    splc_wifi_port_init();   /* Wi-Fi ops; after plc_engine_init() so the boot restore sees them */
     /* Extra App link over LAN (Modbus TCP). Must follow plc_engine_init(): the library
      * contract for plc_modbus_cfg_add_transport(). No-op unless
      * SPLC_HOST_MODBUS_TCP_ENABLE; a failure is logged and USB/RS485 keep working. */
@@ -325,13 +308,14 @@ static void splc_task(void *arg)
     for (;;) {
         if ((TickType_t)(xTaskGetTickCount() - last_check) >= pdMS_TO_TICKS(SPLC_PORT_CHECK_MS)) {
             last_check = xTaskGetTickCount();
-            splc_check_port(&s_io_watch);
 #if SPLC_HOST_APP_LINK_RS485
             splc_check_port(&s_app_watch);
 #endif
         }
+        const uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        splc_bus_poll(now_ms);        /* I/O boards + MB_READ/MB_WRITE ports, shared bus */
         plc_engine_poll();
-        splc_mqtt_port_poll((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+        splc_mqtt_port_poll(now_ms);
         // gw_rs485_diag_poll(GW_RS485_DIAG_PORT);   /* USART3 hardware test; remove when done */
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
@@ -345,17 +329,19 @@ bool splc_host_start(void)
         return false;
     }
 
-    const modbus_serial_port_t port = {
-        .read     = rs485_read_cb,
-        .write    = rs485_write_cb,
-        .set_tx   = NULL,            /* rs485_send() drives DE itself */
-        .ctx      = NULL,
-        .baudrate = SPLC_HOST_RS485_BAUD,
-    };
+    modbus_serial_port_t port;
+    splc_bus_init();
+    splc_bus_io_port(&port);
     if (!splc_gateway_set_rs485_port(&port)) {
         log_error(TAG, "RS485 port registration failed");
         return false;
     }
+#if SPLC_MBM_ENABLE
+    /* MB_READ / MB_WRITE: App ports 1..3 (splc_rs485_bus.c). Registration survives plc_mbm_init(). */
+    if (splc_bus_register_mbm() == 0U) {
+        log_warn(TAG, "MB_READ/MB_WRITE enabled but no App RS485 port is wired (SPLC_HOST_MBM_PORT0..2)");
+    }
+#endif
 
     const splc_link_ops_t ops = {
         .ctx     = NULL,
