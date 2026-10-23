@@ -28,7 +28,7 @@
 
 /* Log through the host's libs/logger (LOGx macros / log_func). */
 #define SPLC_LOGGER_BUILTIN           0
-#define SPLC_LOG_LEVEL                4
+#define SPLC_LOG_LEVEL                3
 
 /* The host firmware has no CubeMX RTC or ADC (no hrtc / hadc in GatewayV2), so
  * SimplePLC's STM32H5 drivers for them must not be built. splc_port.c supplies
