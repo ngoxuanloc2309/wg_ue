@@ -58,11 +58,11 @@
  * not SPLC_HOST_RS485_PORT, and build with -DGW_USB_CDC_ENABLE=OFF. */
 
 /* MB_READ / MB_WRITE: three RS485 ports (App port 1 = USART6, 2 = USART10, 3 = USART3; see
- * SPLC_HOST_MBM_PORT0..2 in splc_port.h). The library supports 1, 2 or 4 ports, so three
- * wired ports need 4 and App port 4 stays unregistered. App port 1 is the I/O boards' UART and
- * is shared with Remote I/O through the arbiter in splc_rs485_bus.c. */
+ * SPLC_HOST_MBM_PORT0..2 in splc_port.h). The Studio sees SPLC_MBM_PORT_COUNT ports (0x0A0A).
+ * App port 1 is the I/O boards' UART and is shared with Remote I/O through the arbiter in
+ * splc_rs485_bus.c. */
 #define SPLC_MBM_ENABLE        1
-#define SPLC_MBM_PORT_COUNT    4
+#define SPLC_MBM_PORT_COUNT    3
 #define SPLC_MBW_ENABLE        1
 
 /* MQTT Subscribe: ports/splc_port/splc_mqtt_port.c + apps/mqtt_client. */

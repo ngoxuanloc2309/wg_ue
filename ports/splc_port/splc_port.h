@@ -83,8 +83,8 @@
 /* MB_READ / MB_WRITE ports. App port N (1..3) is index N-1; the value is the host RS485
  * index (0 = USART3, 1 = USART6, 2 = USART10) or -1 when that App port is not wired.
  * Default = how the enclosure is labelled: port 1 = USART6, 2 = USART10, 3 = USART3.
- * SPLC_MBM_PORT_COUNT (splcopts.h) is 1, 2 or 4 and must cover the wired ports: three
- * wired ports need 4 (App port 4 stays unregistered: its blocks report err_code 1). */
+ * SPLC_MBM_PORT_COUNT (splcopts.h) is 1..4 and must cover the wired ports (three wired
+ * ports = 3: the Studio then sees exactly 3 RS485 ports at 0x0A0A). */
 #ifndef SPLC_HOST_MBM_PORT0
 #define SPLC_HOST_MBM_PORT0       1
 #endif
@@ -156,7 +156,7 @@
 #error "an MB_READ/MB_WRITE port is the RS485 port of the App link (SPLC_HOST_APP_RS485_PORT)"
 #endif
 #if (SPLC_HOST_MBM_PORT2 >= 0 && SPLC_MBM_PORT_COUNT < 3) || (SPLC_HOST_MBM_PORT1 >= 0 && SPLC_MBM_PORT_COUNT < 2)
-#error "SPLC_MBM_PORT_COUNT (splcopts.h) is smaller than the number of wired App ports (3 wired ports need 4)"
+#error "SPLC_MBM_PORT_COUNT (splcopts.h) is smaller than the highest wired App port"
 #endif
 #endif /* SPLC_MBM_ENABLE */
 
