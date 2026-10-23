@@ -2,7 +2,6 @@ build/
 build-t01/
 .settings/
 .agents/
-.vscode/
 .cache/
 .claude/
 
