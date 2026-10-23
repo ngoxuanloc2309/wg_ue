@@ -16,8 +16,14 @@
 #if SPLC_MBM_ENABLE
 #include "plc_mbm.h"
 #endif
+#if SPLC_MBW_ENABLE
+#include "plc_mbw.h"
+#endif
 #if SPLC_REAL_ENABLE
 #include "plc_tagtype.h"
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+#include "plc_mqtt_sub.h"
 #endif
 #include "splc_log.h"
 
@@ -47,8 +53,14 @@ static uint8_t         s_mqtt_backup[PLC_MQTT_FLASH_SIZE];   /* holds the broker
 #if SPLC_MBM_ENABLE
 static uint8_t         s_mb_backup[PLC_MBM_FLASH_SIZE];
 #endif
+#if SPLC_MBW_ENABLE
+static uint8_t         s_mbw_backup[PLC_MBW_FLASH_SIZE];
+#endif
 #if SPLC_REAL_ENABLE
 static uint8_t         s_types_backup[PLC_TAGTYPE_FLASH_SIZE];
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+static uint8_t         s_sub_backup[PLC_MQTT_SUB_FLASH_SIZE];
 #endif
 
 bool plc_clear_rules(void)
@@ -63,8 +75,14 @@ bool plc_clear_rules(void)
 #if SPLC_MBM_ENABLE
     plc_mbm_export(s_mb_backup);          /* and the MB_READ blocks */
 #endif
+#if SPLC_MBW_ENABLE
+    plc_mbw_export(s_mbw_backup);         /* and the MB_WRITE blocks */
+#endif
 #if SPLC_REAL_ENABLE
     plc_tagtype_export(s_types_backup);   /* and the tag-type table */
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+    plc_mqtt_sub_export(s_sub_backup);    /* and the MQTT Subscribe blocks */
 #endif
 
     /*
@@ -88,8 +106,14 @@ bool plc_clear_rules(void)
 #if SPLC_MBM_ENABLE
     plc_mbm_clear_all();       /* every block disabled, draft dropped; BEFORE the save like the others */
 #endif
+#if SPLC_MBW_ENABLE
+    plc_mbw_clear_all();       /* every block disabled, draft dropped; BEFORE the save like the others */
+#endif
 #if SPLC_REAL_ENABLE
     plc_tagtype_clear_all();   /* every tag undeclared, draft dropped; BEFORE the save like the others */
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+    plc_mqtt_sub_clear_all();  /* every block disabled, draft and queues dropped; BEFORE the save like the others */
 #endif
 
     if (plc_rule_flash_save()) {
@@ -115,8 +139,14 @@ bool plc_clear_rules(void)
 #if SPLC_MBM_ENABLE
     (void)plc_mbm_import(s_mb_backup);          /* valid before, tag layout unchanged */
 #endif
+#if SPLC_MBW_ENABLE
+    (void)plc_mbw_import(s_mbw_backup);         /* valid before, tag layout unchanged */
+#endif
 #if SPLC_REAL_ENABLE
     (void)plc_tagtype_import(s_types_backup);   /* valid before, tag layout unchanged */
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+    (void)plc_mqtt_sub_import(s_sub_backup);    /* valid before, tag layout unchanged */
 #endif
     return false;
 }

@@ -15,6 +15,7 @@
 
 #include "plc_engine.h"
 #include "splc_mqtt_port.h"
+#include "splc_modbus_tcp_port.h"
 #include "modbus_link.h"
 #include "modbus_serial.h"
 #include "sx_rtc.h"
@@ -316,6 +317,10 @@ static void splc_task(void *arg)
 
     splc_mqtt_port_init();   /* publish callback; must precede plc_engine_init() */
     plc_engine_init();   /* board_hw_init() builds the virtual I/O from the port */
+    /* Extra App link over LAN (Modbus TCP). Must follow plc_engine_init(): the library
+     * contract for plc_modbus_cfg_add_transport(). No-op unless
+     * SPLC_HOST_MODBUS_TCP_ENABLE; a failure is logged and USB/RS485 keep working. */
+    (void)splc_modbus_tcp_port_start();
 
     for (;;) {
         if ((TickType_t)(xTaskGetTickCount() - last_check) >= pdMS_TO_TICKS(SPLC_PORT_CHECK_MS)) {

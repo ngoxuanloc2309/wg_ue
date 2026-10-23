@@ -90,8 +90,8 @@ splc_config/splcopts.h   (gốc repo) — file cấu hình của sản phẩm hi
   (`PLC_SCAN_INTERVAL_MS`, `MAX_RULES` ≤ 100, `PLC_REBOOT_DELAY_MS`), Flash
   (`SPLC_FLASH_SIZE_KB`), retain (`RETAIN_SNAPSHOT_PERIOD_MS`,
   `PLC_PVD_EMERGENCY_SAVE_ENABLE`, `RETAIN_EMERGENCY_MIN_INTERVAL_MS`), link App
-  (`SPLC_PORT_USB_CDC`, `SPLC_MODBUS_UNIT_ID`, `SPLC_LINK_RX_BUF_SIZE`: lũy thừa của 2,
-  ≥ 256, mặc định 512), REAL (`SPLC_REAL_ENABLE`), Remote I/O (`SPLC_REMOTE_MAX_NODES`,
+  (`SPLC_PORT_USB_CDC`, `SPLC_MODBUS_UNIT_ID`, `SPLC_MODBUS_MAX_TRANSPORTS`, `SPLC_LINK_RX_BUF_SIZE`: lũy thừa của 2,
+  ≥ 256, mặc định 512), REAL (`SPLC_REAL_ENABLE`), MQTT Subscribe (`SPLC_MQTT_SUB_ENABLE`, `SPLC_MQTT_SUB_FIFO_DEPTH`), MB_WRITE (`SPLC_MBW_ENABLE`), Remote I/O (`SPLC_REMOTE_MAX_NODES`,
   `_TIMEOUT_MS`, `_POLL_MS`, `_OFFLINE_AFTER`, `_RETRY_MS`), log (`SPLC_LOG_LEVEL`,
   `SPLC_LOG_BUFFER_SIZE`, `SPLC_LOGGER_BUILTIN`, macro `SPLC_LOG_OUTPUT`).
 - CMake đọc `SPLC_BOARD`, `SPLC_PLATFORM`, `SPLC_LOGGER_BUILTIN` thẳng từ `splcopts.h`
@@ -216,7 +216,7 @@ datasheet khi dùng chip mới: hai bank bằng nhau.
   Modbus. Giá trị MAX_TAGS từ `board/board_tag_define.h`.
 - **`plc_rule`**: `SPLC_RuleRecord` **32 byte** (16 thanh ghi): `threshold_lo/hi`, `for_ms`,
   `action_param` (4 byte); `trigger_tag`, `action_tag`, `guard_tag` (2 byte); `enabled`,
-  `trigger_type`, `compare_op`, `action_type` (1 byte); `reserved[6]` (sender ghi 0).
+  `trigger_type`, `compare_op`, `action_type` (1 byte); `flags` (1 byte, chỉ khi `SPLC_REAL_ENABLE=1`: nửa cao thanh ghi 13; bit 0 `SPLC_RULE_FLAG_FLOAT_DATA`) + `reserved[5]` (sender ghi 0; khi `REAL=0` là `reserved[6]`). Rule có `flags & 1` (R2): `threshold_lo/hi`, `action_param` và giá trị tag trigger là bit float32 trong ô int32 — `compare_ok_f()` (EQ/NEQ dung sai tuyệt đối 1e-5, còn lại so chính xác; NaN không thoả phép so nào) và `ACT_SCALE_TAG` = `x*float(action_param) + float(threshold_hi)`; engine chỉ nhìn cờ này, KHÔNG tra bảng kiểu tag.
   Định danh rule = vị trí. `guard_tag`: bit 0-14 = index, bit 15 = NEGATE, **"không có
   guard" = `GUARD_TAG_NONE` = `0x7FFF`** (KHÔNG phải 0, vì index 0 là `TAG_DI0` thật).
   Trigger: ON_CHANGE, ON_RISE, ON_FALL, TIME_WINDOW, INTERVAL. Compare: NONE, EQ, NEQ,
@@ -256,19 +256,21 @@ timeout bằng tick thật, CRC bằng `nmbs_crc_calc()` (byte-swapped, ghi big-
 - **`plc_io`**: đăng ký kênh (`plc_io_register_di/do/ai(tag_idx, hw)`); `input_scan()` (DI
   0/1, AI mã ADC thô) và `output_scan()` (DO từ tag). Cuối mỗi hàm gọi hook của
   **`plc_io_remote`** (DI/DO ảo của Gateway, mục 5.1; không làm gì khi chưa có node).
-- **`plc_modbus_cfg`**: nanoMODBUS server + register map (mục 5), State Machine #2 nạp
+- **`plc_modbus_cfg`**: nanoMODBUS server + register map (mục 5); `SPLC_MODBUS_MAX_TRANSPORTS > 1` cho phép host thêm transport (vd. Modbus TCP) bằng `plc_modbus_cfg_add_transport()` — mỗi transport một server, poll lần lượt, dùng chung nháp/COMMIT/Flash (một App mỗi lúc), State Machine #2 nạp
   rule (staging → verify CRC16 → commit nguyên tử), Diag Control (ENTER/HEARTBEAT/EXIT,
   lease, ghi tag trong diag, retain draft), RTC, FB, System Command.
 - **`plc_rule_flash`**: lưu Rule Table A/B (xem handoff mục 1 về thứ tự và recovery); bản
-  ghi = header 8 B (seq_num, rule_count + cờ FB/MQTT, crc16) + rule wire + đoạn FB 128 B [+ đoạn MQTT 960 B, bit 13,
-  chỉ khi `SPLC_MQTT_ENABLE=1`] [+ bảng kiểu tag 128 B, bit 11, chỉ khi `SPLC_REAL_ENABLE=1`].
+  ghi = header 8 B (seq_num, rule_count + cờ FB/MQTT, crc16) + rule wire (byte `flags` ở thanh ghi 13 nằm trong ảnh wire nên được CRC phủ) + đoạn FB 128 B [+ đoạn MQTT 960 B, bit 13,
+  chỉ khi `SPLC_MQTT_ENABLE=1`] [+ bảng kiểu tag 128 B, bit 11, chỉ khi `SPLC_REAL_ENABLE=1`] [+ đoạn MQTT Subscribe 256 B, bit 10, chỉ khi `SPLC_MQTT_SUB_ENABLE=1`] [+ đoạn MB_WRITE 512 B, bit 9, cuối cùng, chỉ khi `SPLC_MBW_ENABLE=1`].
 - **`plc_retain`**: snapshot xoay vòng cho VREG_RETAIN (record 208 B: seq, count, crc16,
   tag_idx+value); khôi phục lúc boot lấy record CRC-hợp-lệ có seq lớn nhất; lưu theo
   COMMIT_RETAIN, chu kỳ, và PVD khẩn cấp (ISR).
 - **`plc_fb`**: khối Timer/Counter `0x0B00..0x0B7F` (nháp + COMMIT; Timer báo cáo qua
   `rule_ref`; Counter đọc CV từ tag do Host chọn).
 - **`plc_tagtype`** (chỉ khi `SPLC_REAL_ENABLE=1`): bảng kiểu tag `0x0080..0x00BF` (nháp + COMMIT, `plc_tagtype_get()` cho MB_READ/Publish/SUB; Rule Engine không tra bảng). Lưu trong bản ghi Rule Table (bit 11); xem handoff quyết định 41–42.
-- **`plc_mbm`** (chỉ khi `SPLC_MBM_ENABLE=1`): MB_READ, master Modbus RTU đọc cảm biến theo 4 khối `0x1000..0x10FF` (nháp + COMMIT, lưu bit 12 của bản ghi Rule Table, mỗi scan một request qua `modbus_rtu_master_read_fc`, ghi vào tag). Cổng RS485 + cấu hình baud do host đăng ký (`splc_mbm_set_rs485_port`); xem `plc_mbm.h`, handoff quyết định 38–39, 43–44.
+- **`plc_mbm`** (chỉ khi `SPLC_MBM_ENABLE=1`): MB_READ, master Modbus RTU đọc cảm biến theo 4 khối `0x1000..0x10FF` (nháp + COMMIT, lưu bit 12 của bản ghi Rule Table, mỗi scan một request qua `modbus_rtu_master_read_fc`, ghi vào tag). `SPLC_MBM_PORT_COUNT` (1/2/4) cổng RS485, mỗi cổng một master; host đăng ký từng cổng (`splc_mbm_set_rs485_port(index, port, configure)`), baud/parity/data/stop/gap/retry do App ghi ở `0x1400..0x143F` (MBM-003, lưu cùng đoạn bit 12 = 640 B); xem `plc_mbm.h`, handoff quyết định 38–39, 43–44, 46.
+- **`plc_mbw`** (chỉ khi `SPLC_MBW_ENABLE=1`, cần `SPLC_MBM_ENABLE=1`): MB_WRITE, ghi tag xuống slave Modbus qua FC05/06/15/16 (Direct hoặc ChannelIndexed/Sort-to-Light), 4 khối `0x1100..0x11FF` (nháp + COMMIT, lưu bit 9 của bản ghi Rule Table, đoạn cuối). Mượn master RS485 của `plc_mbm` qua `plc_mbm_port_claim/release` (mỗi khung một lần, ghi được ưu tiên hơn đọc); `plc_mbw_scan()` chạy TRƯỚC `plc_mbm_scan()`. Xem `plc_mbw.h`, handoff quyết định 48.
+- **`plc_mqtt_sub`** (chỉ khi `SPLC_MQTT_SUB_ENABLE=1`, cần `SPLC_MQTT_ENABLE=1`): MQTT Subscribe, lệnh/setpoint từ broker vào tag, 2 khối `0x0D80..0x0DFF` (nháp + COMMIT, lưu bit 10 của bản ghi Rule Table, đoạn cuối). Không có client mạng: host subscribe theo `splc_mqtt_sub_get()` và đẩy bản tin vào `splc_mqtt_input()`; `plc_mqtt_sub_scan()` chạy sau `input_scan()`, trước `rule_scan`. Xem `plc_mqtt_sub.h`, handoff quyết định 47.
 - **`plc_rtc`**: khối `0x0810` (epoch UTC, tz, `status_flags` RO), `plc_rtc_get_local_hhmm()`.
 
 ### Layer 4 — Engine
@@ -283,7 +285,7 @@ unsigned, an toàn khi tràn):
 
 ```
 diag_tick → input_scan
-  → [không bị diag treo]  rule_scan (+ rule_runtime_reset khi vừa thoát diag) → plc_fb_scan
+  → [không bị diag treo]  plc_mqtt_sub_scan (SPLC_MQTT_SUB_ENABLE) → rule_scan (+ rule_runtime_reset khi vừa thoát diag) → plc_fb_scan
   → output_scan → modbus_config_service → retain_service → ghi scan_time
   → plc_system_cmd_service            (cuối cùng: có thể reset MCU)
 ```
@@ -302,7 +304,7 @@ ghi, high byte trước; CRC khung RTU little-endian.
 | `0x0010` | R | Rule Table Info (số rule active) |
 | `0x0020..0x0029` | R | Device Resource Info |
 | `0x0080..0x00BF` | R/W | Tag DataType Registry (chỉ khi `SPLC_REAL_ENABLE=1`; 1 byte/tag: 0 chưa khai=INT32, 1 BOOL, 2 INT32, 3 REAL; tag chẵn ở High byte; ghi vào nháp, COMMIT áp dụng) |
-| `0x0100..0x073F` | R | Active Rule Table (16 reg/rule, tối đa 100) |
+| `0x0100..0x073F` | R | Active Rule Table (16 reg/rule, tối đa 100; reg +13 nửa cao = `flags` khi `SPLC_REAL_ENABLE=1`) |
 | `0x0800..0x0809` | R | Device Health |
 | `0x0810..0x0813` | R/W | RTC (`epoch_utc_s`, `tz_offset_min`, `status_flags` RO) |
 | `0x0900..0x09FF` | R (W khi `DIAG_CONTROL`) | Runtime tag, 2 reg/tag, cửa sổ 128 tag (tag ≥ `MAX_TAGS` đọc 0, ghi bị từ chối `0x02`) |
@@ -310,7 +312,11 @@ ghi, high byte trước; CRC khung RTU little-endian.
 | `0x0A01..0x0A02` | R | Command Status, Error Code |
 | `0x0A20..0x0A24` | R/W | Diag Control (Command, State, Flags, LeaseMs, ErrorCode) |
 | `0x0B00..0x0B3F` / `0x0B40..0x0B7F` | R/W | 8 Timer / 8 Counter, 8 reg mỗi khối |
+| `0x0D80..0x0DFF` | R/W | MQTT Subscribe, 2 khối × 64 reg (chỉ khi `SPLC_MQTT_SUB_ENABLE=1`; ghi vào nháp, COMMIT áp dụng; ngoài ra Reserved → exception `0x02`) |
+| `0x0A0A` | R | Số cổng RS-485 vật lý (uint16 = `SPLC_MBM_PORT_COUNT`; chỉ khi `SPLC_MBM_ENABLE=1`) |
 | `0x1000..0x10FF` | R/W | MB_READ, 4 khối × 64 reg (chỉ khi `SPLC_MBM_ENABLE=1`; ghi vào nháp, COMMIT áp dụng) |
+| `0x1100..0x11FF` | R/W | MB_WRITE, 4 khối × 64 reg (chỉ khi `SPLC_MBW_ENABLE=1`; ghi vào nháp, COMMIT áp dụng) |
+| `0x1400..0x143F` | R/W | Bảng cổng RS-485 (4 × 16 reg, MBM-003; chỉ khi `SPLC_MBM_ENABLE=1`; nháp + COMMIT) |
 | `0x9000..0x9005` | R/W | Staging handshake (status, error, staged count, expected CRC, active count, active CRC) |
 | `0x9010..0x964F` | W | Staging Rule Buffer |
 | `0xA000` | W | Commit (`0xA5A5`) |

@@ -58,4 +58,14 @@
  * not SPLC_HOST_RS485_PORT, and build with -DGW_USB_CDC_ENABLE=OFF. */
 
 #define SPLC_MBM_ENABLE 1
+
+/* App link over LAN (Modbus TCP) - implemented in ports/splc_port/splc_modbus_tcp_port.c
+ * but currently OFF: rules are deployed over USB CDC. With both lines below at their
+ * values here the binary is identical to a build without the TCP code.
+ * To turn it on set SPLC_MODBUS_MAX_TRANSPORTS 2 and SPLC_HOST_MODBUS_TCP_ENABLE 1.
+ * It listens on port 5020 (apps/modbus_tcp_server owns 502), costs about 392 B RAM
+ * (only 2 992 B of static RAM are left, handoff decision 26: measure the host map),
+ * and has no authentication: set SPLC_HOST_MODBUS_TCP_ALLOW_NET/_MASK to limit clients. */
+#define SPLC_MODBUS_MAX_TRANSPORTS      1
+#define SPLC_HOST_MODBUS_TCP_ENABLE     0
 #endif /* SPLCOPTS_H */

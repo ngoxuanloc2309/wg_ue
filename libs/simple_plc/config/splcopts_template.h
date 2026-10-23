@@ -49,12 +49,16 @@
 
 /* --- Modbus master blocks (MB_READ) ----------------------------------- */
 /* #define SPLC_MBM_ENABLE               0 */      /* 1 = Modbus-master service + 125-register master buffers; 0 = no change at all */
-/* #define SPLC_MBM_SERIAL_BAUD          9600U */  /* MB_READ sensor bus line settings until the App can set them (plc_mbm.h) */
-/* #define SPLC_MBM_SERIAL_PARITY        0 */      /* 0 none, 1 odd, 2 even */
-/* #define SPLC_MBM_SERIAL_STOP_BITS     1 */      /* 1 or 2 */
+/* #define SPLC_MODBUS_MAX_TRANSPORTS    1 */      /* 1..3 App-link transports served at once (USB + RS-485 + TCP); 1 = no change at all */
+/* #define SPLC_MBW_ENABLE               0 */      /* 1 = MB_WRITE blocks 0x1100..0x11FF (needs SPLC_MBM_ENABLE 1); 0 = no change at all */
+/* #define SPLC_MBM_PORT_COUNT           1 */      /* 1, 2 or 4 RS-485 ports for MB_READ/MB_WRITE (reported at 0x0A0A); the host registers one UART per port with splc_mbm_set_rs485_port(); line settings come from the App (0x1400) */
+
+/* --- MQTT Subscribe ----------------------------------------------------- */
+/* #define SPLC_MQTT_SUB_ENABLE          0 */      /* 1 = remote commands/setpoints from MQTT into tags (needs SPLC_MQTT_ENABLE 1); 0 = no change at all */
+/* #define SPLC_MQTT_SUB_FIFO_DEPTH      1 */      /* 1..8 queued messages per block for FIFO delivery; 1 = latest only */
 
 /* --- REAL (float32) tags ---------------------------------------------- */
-/* #define SPLC_REAL_ENABLE              0 */      /* 1 = Tag DataType Registry 0x0080 (BOOL/INT32/REAL per tag); 0 = no change at all */
+/* #define SPLC_REAL_ENABLE              0 */      /* 1 = Tag DataType Registry 0x0080 (BOOL/INT32/REAL per tag) + float32 Rule Engine (rule flags bit 0); 0 = no change at all */
 
 /* --- MQTT Publish ---------------------------------------------------- */
 /* #define SPLC_MQTT_ENABLE              0 */      /* 1 = build plc_mqtt (Gateway); 0 = no change at all */

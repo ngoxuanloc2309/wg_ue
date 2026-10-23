@@ -221,10 +221,31 @@
  * (docs/handoff.md decisions 40 and 41)
  * ==================================================================== */
 /* 1 = build plc_tagtype (the table that says which tag is BOOL / INT32 / REAL;
- * staged with the Deploy, saved in the Flash Rule Table record as flag bit 11).
- * 0 = nothing changes: no table, no Flash flag, the exact baseline size. */
+ * staged with the Deploy, saved in the Flash Rule Table record as flag bit 11)
+ * AND the float Rule Engine (step R2): the rule record's `flags` byte (wire
+ * register 13, high byte) is carried over the wire / CRC / Flash / RAM, and a rule
+ * with SPLC_RULE_FLAG_FLOAT_DATA compares float32 and scales in float32.
+ * 0 = nothing changes: no table, no Flash flag, no rule flags byte, the exact
+ * baseline binary (byte-identical, checked with md5 of the .bin). */
 #ifndef SPLC_REAL_ENABLE
 #define SPLC_REAL_ENABLE                 1
+#endif
+
+/* ======================================================================
+ * MQTT Subscribe (0x0D80..0x0DFF, ICD SPLC-SPEC-MQTT-002): commands / setpoints
+ * from the broker land in tags. Needs SPLC_MQTT_ENABLE = 1 (the broker config and
+ * the connection status live there). The library holds the LOGIC and the data;
+ * the host subscribes the topics it is asked for (splc_mqtt_sub_get()) and hands
+ * every message to splc_mqtt_input() (plc_mqtt_sub.h).
+ * 0 = nothing changes: no code, no Flash flag, the exact baseline binary. */
+#ifndef SPLC_MQTT_SUB_ENABLE
+#define SPLC_MQTT_SUB_ENABLE             0
+#endif
+/* Messages queued per block when the App asks for FIFO delivery (1..8). One is
+ * applied per scan. 1 = latest message only (a FIFO request then behaves as such).
+ * RAM: 2 blocks x depth x (128 payload + length) bytes. */
+#ifndef SPLC_MQTT_SUB_FIFO_DEPTH
+#define SPLC_MQTT_SUB_FIFO_DEPTH         1
 #endif
 
 /* ======================================================================
@@ -235,22 +256,36 @@
  * per master instance). 0 = nothing changes: the master keeps its 16-register
  * / 64-byte buffers and the exact code of the Remote I/O link. */
 #ifndef SPLC_MBM_ENABLE
-#define SPLC_MBM_ENABLE                  0
+#define SPLC_MBM_ENABLE                  1
 #endif
 
-/* Line settings of the MB_READ RS485 port, used until the App can set them over
- * the wire (the wire has no field for them yet -- see plc_mbm.h). The host port
- * applies them through the optional configure() callback of
- * splc_mbm_set_rs485_port(); a host that cannot re-configure its UART keeps the
- * baud rate its port has. */
-#ifndef SPLC_MBM_SERIAL_BAUD
-#define SPLC_MBM_SERIAL_BAUD             9600U
+/* Number of physical RS-485 ports the device offers to the Modbus-master blocks
+ * (MB_READ / MB_WRITE): 1, 2 or 4. It is what register 0x0A0A reports and what the
+ * App limits its port list to; the firmware allocates one master (about 600 bytes
+ * RAM) per port. Which UART serves which port is the host's business: it registers
+ * one RS485 port per index with splc_mbm_set_rs485_port() (plc_mbm.h). Baud rate,
+ * parity, data/stop bits, inter-frame delay and retries of every port come from the
+ * App over the wire (0x1400..0x143F, SPLC-SPEC-MBM-003). */
+#ifndef SPLC_MBM_PORT_COUNT
+#define SPLC_MBM_PORT_COUNT              1
 #endif
-#ifndef SPLC_MBM_SERIAL_PARITY
-#define SPLC_MBM_SERIAL_PARITY           0     /* 0 = none, 1 = odd, 2 = even */
+
+/* 1 = build MB_WRITE (0x1100..0x11FF, plc_mbw.h): the device writes tags to Modbus
+ * slaves (FC05/06/15/16, Direct or Channel-Indexed) through the RS-485 ports of the
+ * Modbus master (needs SPLC_MBM_ENABLE = 1, shares its ports and port table). 0 =
+ * nothing changes: no code, no Flash flag, the exact baseline binary. */
+#ifndef SPLC_MBW_ENABLE
+#define SPLC_MBW_ENABLE                  0
 #endif
-#ifndef SPLC_MBM_SERIAL_STOP_BITS
-#define SPLC_MBM_SERIAL_STOP_BITS        1     /* 1 or 2 */
+
+/* Number of App-link transports the Modbus config server can serve at once (1..3).
+ * 1 = exactly the single transport board_get_modbus_transport() returns: no extra
+ * code, no extra RAM, the exact baseline binary. >1 = plc_modbus_cfg_add_transport()
+ * accepts that many additional transports (e.g. Modbus TCP next to USB/RS-485), each
+ * with its own nanoMODBUS server instance (RAM cost: sizeof(nmbs_t) + a transport
+ * struct per extra slot). They share the draft/COMMIT/Flash state: one App at a time. */
+#ifndef SPLC_MODBUS_MAX_TRANSPORTS
+#define SPLC_MODBUS_MAX_TRANSPORTS       1
 #endif
 
 /* Size of the payload buffer in bytes (including the NUL). */
@@ -369,17 +404,29 @@
 #if (SPLC_MBM_ENABLE != 0) && (SPLC_MBM_ENABLE != 1)
 #error "SPLC_MBM_ENABLE must be 0 or 1"
 #endif
-#if (SPLC_MBM_SERIAL_BAUD < 1200U) || (SPLC_MBM_SERIAL_BAUD > 921600U)
-#error "SPLC_MBM_SERIAL_BAUD must be 1200..921600"
+#if SPLC_MBM_ENABLE && (SPLC_MBM_PORT_COUNT != 1) && (SPLC_MBM_PORT_COUNT != 2) && (SPLC_MBM_PORT_COUNT != 4)
+#error "SPLC_MBM_PORT_COUNT must be 1, 2 or 4"
 #endif
-#if (SPLC_MBM_SERIAL_PARITY < 0) || (SPLC_MBM_SERIAL_PARITY > 2)
-#error "SPLC_MBM_SERIAL_PARITY must be 0 (none), 1 (odd) or 2 (even)"
+#if (SPLC_MODBUS_MAX_TRANSPORTS < 1) || (SPLC_MODBUS_MAX_TRANSPORTS > 3)
+#error "SPLC_MODBUS_MAX_TRANSPORTS must be 1..3"
 #endif
-#if (SPLC_MBM_SERIAL_STOP_BITS != 1) && (SPLC_MBM_SERIAL_STOP_BITS != 2)
-#error "SPLC_MBM_SERIAL_STOP_BITS must be 1 or 2"
+#if (SPLC_MBW_ENABLE != 0) && (SPLC_MBW_ENABLE != 1)
+#error "SPLC_MBW_ENABLE must be 0 or 1"
+#endif
+#if SPLC_MBW_ENABLE && !SPLC_MBM_ENABLE
+#error "SPLC_MBW_ENABLE = 1 needs SPLC_MBM_ENABLE = 1 (MB_WRITE shares the RS-485 ports of the Modbus master)"
 #endif
 #if (SPLC_REAL_ENABLE != 0) && (SPLC_REAL_ENABLE != 1)
 #error "SPLC_REAL_ENABLE must be 0 or 1"
+#endif
+#if (SPLC_MQTT_SUB_ENABLE != 0) && (SPLC_MQTT_SUB_ENABLE != 1)
+#error "SPLC_MQTT_SUB_ENABLE must be 0 or 1"
+#endif
+#if SPLC_MQTT_SUB_ENABLE && !SPLC_MQTT_ENABLE
+#error "SPLC_MQTT_SUB_ENABLE = 1 needs SPLC_MQTT_ENABLE = 1"
+#endif
+#if SPLC_MQTT_SUB_ENABLE && ((SPLC_MQTT_SUB_FIFO_DEPTH < 1) || (SPLC_MQTT_SUB_FIFO_DEPTH > 8))
+#error "SPLC_MQTT_SUB_FIFO_DEPTH must be 1..8"
 #endif
 #if (SPLC_MQTT_PAYLOAD_MAX < 128) || (SPLC_MQTT_PAYLOAD_MAX > 512)
 #error "SPLC_MQTT_PAYLOAD_MAX must be 128..512 (compact JSON worst case is 127 characters + NUL)"

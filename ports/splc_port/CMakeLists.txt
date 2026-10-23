@@ -23,6 +23,7 @@ add_library(ports_splc_port STATIC)
 target_sources(ports_splc_port PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_mqtt_port.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/splc_modbus_tcp_port.c
        ${CMAKE_CURRENT_SOURCE_DIR}/gw_rs485_diag.c
 )
 # CDC-only USB device: this port owns the USB peripheral (GW_USB_CDC_ENABLE).

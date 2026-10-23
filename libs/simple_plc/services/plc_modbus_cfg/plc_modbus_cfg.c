@@ -13,6 +13,10 @@
 #include "plc_mqtt.h"       /* MQTT blocks 0x0C00..0x0D7F / 0x0E00..0x0E5F (SPLC_MQTT_ENABLE=1 only) */
 #include "plc_tagtype.h"    /* Tag DataType Registry 0x0080..0x00BF (SPLC_REAL_ENABLE=1 only) */
 #include "plc_mbm.h"        /* MB_READ blocks 0x1000..0x10FF (SPLC_MBM_ENABLE=1 only) */
+#include "plc_mbw.h"        /* MB_WRITE blocks 0x1100..0x11FF (SPLC_MBW_ENABLE=1 only) */
+#if SPLC_MQTT_SUB_ENABLE
+#include "plc_mqtt_sub.h"    /* MQTT Subscribe blocks 0x0D80..0x0DFF (SPLC_MQTT_SUB_ENABLE=1 only) */
+#endif
 #include "sx_time.h"
 #include "splc_log.h"
 
@@ -72,6 +76,16 @@ static uint32_t            s_boot_tick_ms;
  * jumps to address 0 and HardFaults on the very first scan cycle.
  */
 static bool                s_initialized = false;
+
+#if SPLC_MODBUS_MAX_TRANSPORTS > 1
+/* Extra transports (slot 0 above stays the board's own). Same lifetime rules as
+ * s_transport: the struct is copied, ctx is the caller's. */
+#define EXTRA_TRANSPORTS  (SPLC_MODBUS_MAX_TRANSPORTS - 1)
+static nmbs_t              s_x_nmbs[EXTRA_TRANSPORTS];
+static modbus_transport_t  s_x_transport[EXTRA_TRANSPORTS];
+static uint8_t             s_x_count = 0U;       /* slots in use, all created OK */
+static bool                s_x_tcp   = false;    /* a TCP transport is registered */
+#endif
 
 /*
  * --- Rule Transfer staging state (register map section 9, 0x9000-0xA001) -
@@ -152,17 +166,18 @@ static void read_device_resource_info(uint16_t offset, uint16_t quantity, uint16
     }
 }
 
-#if SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE
+#if SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE || (SPLC_MODBUS_MAX_TRANSPORTS > 1)
 /* --- HARDWARE_CAPABILITIES (0x0A08-0x0A09, RO, uint32, High Word first) -------------------------
  * App contract: docs/platform/SimplePLC_App_MCU_Structs_v2.0 (paa) and simpleplc_protocol_v2_0.h,
  * SPLC_HardwareCapabilities_t. The App reads this before it writes the MQTT blocks and SKIPS the
  * whole MQTT step when SPLC_CAP_MQTT_PUB is missing (or when this address answers an exception).
- * Only what the library can prove is declared; ETHERNET / RTC / MQTT_SUB / SD are board or host
- * facts and stay 0 here. Compiled only with SPLC_MQTT_ENABLE=1 so that SPLC_MQTT_ENABLE=0 builds
+ * Only what the library can prove is declared; ETHERNET / RTC / SD are board or host
+ * facts and stay 0 here (MQTT_SUB is declared when SPLC_MQTT_SUB_ENABLE=1). Compiled only with SPLC_MQTT_ENABLE=1 so that SPLC_MQTT_ENABLE=0 builds
  * keep the exact baseline size (handoff.md: SPLC_MQTT_ENABLE=0 must match it). */
 #define SPLC_CAP_BASE_LOGIC   0x00000001UL
 #define SPLC_CAP_RETENTIVE    0x00000002UL
 #define SPLC_CAP_MQTT_PUB     0x00000010UL
+#define SPLC_CAP_MODBUS_TCP   0x00000400UL   /* App header SPLC_CAP_MODBUS_TCP; declared only while a TCP transport is registered */
 
 static void read_hw_capabilities(uint16_t offset, uint16_t quantity, uint16_t *registers_out)
 {
@@ -173,6 +188,12 @@ static void read_hw_capabilities(uint16_t offset, uint16_t quantity, uint16_t *r
 #if SPLC_MBM_ENABLE
     caps |= PLC_MBM_CAP_MODBUS_MASTER;
 #endif
+#if SPLC_MQTT_SUB_ENABLE
+    caps |= PLC_MQTT_SUB_CAP_MQTT_SUB;
+#endif
+#if SPLC_MODBUS_MAX_TRANSPORTS > 1
+    if (s_x_tcp) { caps |= SPLC_CAP_MODBUS_TCP; }
+#endif
     if (g_device_resource_info.max_rules > 0U)        { caps |= SPLC_CAP_BASE_LOGIC; }
     if (g_device_resource_info.vreg_retain_count > 0U) { caps |= SPLC_CAP_RETENTIVE; }
 
@@ -180,6 +201,21 @@ static void read_hw_capabilities(uint16_t offset, uint16_t quantity, uint16_t *r
     const uint16_t words[2] = { (uint16_t)(caps >> 16), (uint16_t)(caps & 0xFFFFUL) };
     for (uint16_t i = 0; i < quantity; i++) {
         registers_out[i] = words[offset + i];
+    }
+}
+#endif
+
+#if SPLC_MBM_ENABLE
+/* --- RS485_PORT_COUNT (0x0A0A, RO, uint16) -------------------------------------
+ * Physical RS-485 ports the Modbus-master blocks can use (SPLC_MBM_PORT_COUNT). The
+ * App (2.10.0) limits its port list to this and refuses to deploy a project that
+ * uses a port beyond it. A device without MBM does not map the address (exception
+ * 0x02): the App then assumes 0 ports unless 0x0A08 declares MODBUS_MASTER. */
+static void read_rs485_port_count(uint16_t offset, uint16_t quantity, uint16_t *registers_out)
+{
+    (void)offset;
+    for (uint16_t i = 0; i < quantity; i++) {
+        registers_out[i] = plc_mbm_port_count();
     }
 }
 #endif
@@ -235,7 +271,10 @@ static void read_active_rule_table(uint16_t address, uint16_t quantity, uint16_t
             case 10: word = r->guard_tag; break;
             case 11: word = (uint16_t)((r->enabled << 8) | r->trigger_type); break;
             case 12: word = (uint16_t)((r->compare_op << 8) | r->action_type); break;
-            default: word = 0; break; /* +13..+15: reserved, sender writes 0 */
+#if SPLC_REAL_ENABLE
+            case 13: word = (uint16_t)((uint16_t)r->flags << 8); break;   /* +13 high byte = rule flags */
+#endif
+            default: word = 0; break; /* +13 (REAL=0) / +14..+15: reserved, sender writes 0 */
         }
 
         registers_out[i] = word;
@@ -836,7 +875,12 @@ void rule_record_to_wire(const SPLC_RuleRecord *r, uint8_t out[32])
     w[10] = r->guard_tag;
     w[11] = (uint16_t)(((uint16_t)r->enabled << 8) | r->trigger_type);
     w[12] = (uint16_t)(((uint16_t)r->compare_op << 8) | r->action_type);
-    w[13] = 0; w[14] = 0; w[15] = 0;   /* reserved[6]: sender writes 0 */
+#if SPLC_REAL_ENABLE
+    w[13] = (uint16_t)((uint16_t)r->flags << 8);   /* high byte = rule flags (float bit), low byte reserved */
+#else
+    w[13] = 0;
+#endif
+    w[14] = 0; w[15] = 0;              /* reserved: sender writes 0 */
 
     for (uint8_t i = 0; i < 16U; i++) {
         out[2U * i]      = (uint8_t)(w[i] >> 8);
@@ -906,6 +950,9 @@ static void read_staging_rule_table(uint16_t address, uint16_t quantity, uint16_
             case 10: word = r->guard_tag; break;
             case 11: word = (uint16_t)((r->enabled << 8) | r->trigger_type); break;
             case 12: word = (uint16_t)((r->compare_op << 8) | r->action_type); break;
+#if SPLC_REAL_ENABLE
+            case 13: word = (uint16_t)((uint16_t)r->flags << 8); break;
+#endif
             default: word = 0; break;
         }
 
@@ -954,7 +1001,10 @@ static void write_staging_rule_table(uint16_t address, uint16_t quantity, const 
             case 10: r->guard_tag = word; break;
             case 11: r->enabled = (uint8_t)(word >> 8); r->trigger_type = (uint8_t)(word & 0xFFU); break;
             case 12: r->compare_op = (uint8_t)(word >> 8); r->action_type = (uint8_t)(word & 0xFFU); break;
-            default: break; /* +13..+15: reserved, receiver ignores per section 6's encoding table. */
+#if SPLC_REAL_ENABLE
+            case 13: r->flags = (uint8_t)(word >> 8); break;   /* low byte reserved, ignored */
+#endif
+            default: break; /* +13 (REAL=0) / +14..+15: reserved, receiver ignores per section 6's encoding table. */
         }
     }
 }
@@ -1037,6 +1087,12 @@ static void write_commit_command(uint16_t value)
 #endif
 #if SPLC_MBM_ENABLE
         plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
 #endif
         return;
     }
@@ -1058,6 +1114,12 @@ static void write_commit_command(uint16_t value)
 #endif
 #if SPLC_MBM_ENABLE
         plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
 #endif
         return;
     }
@@ -1080,6 +1142,12 @@ static void write_commit_command(uint16_t value)
         plc_tagtype_discard_draft();
 #if SPLC_MBM_ENABLE
         plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
 #endif
         return;
     }
@@ -1100,6 +1168,58 @@ static void write_commit_command(uint16_t value)
         plc_tagtype_discard_draft();
 #endif
         plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
+#endif
+        return;
+    }
+#endif
+
+#if SPLC_MBW_ENABLE
+    /* MB_WRITE draft: checked as a whole BEFORE anything is applied, like the others
+     * (plc_mbw.h). */
+    if (!plc_mbw_validate_draft()) {
+        log_warn(TAG, "commit rejected: MB_WRITE draft failed validation");
+        s_config_status     = CONFIG_STATUS_ERROR;
+        s_config_error_code = SPLC_ERROR_INVALID_PARAMETER;
+        plc_fb_discard_draft();
+#if SPLC_MQTT_ENABLE
+        plc_mqtt_discard_draft();
+#endif
+#if SPLC_REAL_ENABLE
+        plc_tagtype_discard_draft();
+#endif
+        plc_mbm_discard_draft();
+        plc_mbw_discard_draft();
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
+#endif
+        return;
+    }
+#endif
+
+#if SPLC_MQTT_SUB_ENABLE
+    /* MQTT Subscribe draft: checked as a whole BEFORE anything is applied, like the
+     * others (plc_mqtt_sub.h). */
+    if (!plc_mqtt_sub_validate_draft()) {
+        log_warn(TAG, "commit rejected: MQTT Subscribe draft failed validation");
+        s_config_status     = CONFIG_STATUS_ERROR;
+        s_config_error_code = SPLC_ERROR_INVALID_PARAMETER;
+        plc_fb_discard_draft();
+        plc_mqtt_discard_draft();
+#if SPLC_REAL_ENABLE
+        plc_tagtype_discard_draft();
+#endif
+#if SPLC_MBM_ENABLE
+        plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+        plc_mqtt_sub_discard_draft();
         return;
     }
 #endif
@@ -1120,6 +1240,12 @@ static void write_commit_command(uint16_t value)
 #endif
 #if SPLC_MBM_ENABLE
         plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
 #endif
         return;
     }
@@ -1146,6 +1272,16 @@ static void write_commit_command(uint16_t value)
     /* Like MQTT: blocks the Host wrote take their draft, the others keep running.
      * Before the Flash save so one record carries it all. */
     plc_mbm_commit_draft();
+#endif
+#if SPLC_MBW_ENABLE
+    /* Like MB_READ: blocks the Host wrote take their draft, the others keep running.
+     * Before the Flash save so one record carries it all. */
+    plc_mbw_commit_draft();
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+    /* Like MQTT: blocks the Host wrote take their draft, the others keep running.
+     * Before the Flash save so one record carries it all. */
+    plc_mqtt_sub_commit_draft();
 #endif
 
     /*
@@ -1249,8 +1385,11 @@ static const modbus_block_t s_blocks[] = {
     { 0x0810, 0x0813, true,  plc_rtc_read,                NULL },   /* FC16 writes handled in cb_write_multiple_registers (needs distinct exceptions) */
     { 0x0900, 0x09FF, false, read_runtime_tag_values,     NULL },
     { 0x0A01, 0x0A02, true,  read_system_command_result,  NULL },
-#if SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE
+#if SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE || (SPLC_MODBUS_MAX_TRANSPORTS > 1)
     { 0x0A08, 0x0A09, true,  read_hw_capabilities,        NULL },   /* RO; App gates the MQTT deploy on bit 4 */
+#endif
+    #if SPLC_MBM_ENABLE
+    { 0x0A0A, 0x0A0A, true,  read_rs485_port_count,       NULL },   /* RO */
 #endif
     { 0x0A20, 0x0A24, true,  read_diag_block,             NULL },   /* 0x0A20 writes handled in cb_write_*, not here */
     { 0x0B00, 0x0B7F, true,  plc_fb_read,                 NULL },   /* FC16 writes handled in cb_write_multiple_registers (needs distinct exceptions) */
@@ -1258,8 +1397,15 @@ static const modbus_block_t s_blocks[] = {
     { 0x0C00, 0x0D7F, true,  plc_mqtt_telemetry_read,     NULL },   /* FC16 writes handled in cb_write_multiple_registers */
     { 0x0E00, 0x0E5F, true,  plc_mqtt_broker_read,        NULL },   /* 0x0E54..0x0E5F read-only status; FC16 writes handled in cb_write_multiple_registers */
 #endif
+#if SPLC_MQTT_SUB_ENABLE
+    { 0x0D80, 0x0DFF, true,  plc_mqtt_sub_read,           NULL },   /* RUNNING blocks; FC16 writes handled in cb_write_multiple_registers (go to the draft) */
+#endif
 #if SPLC_MBM_ENABLE
-    { 0x1000, 0x10FF, true,  plc_mbm_read,                NULL },   /* FC16 writes handled in cb_write_multiple_registers (go to the draft) */
+        { 0x1000, 0x10FF, true,  plc_mbm_read,                NULL },   /* FC16 writes handled in cb_write_multiple_registers (go to the draft) */
+#if SPLC_MBW_ENABLE
+    { 0x1100, 0x11FF, true,  plc_mbw_read,                NULL },   /* MB_WRITE; FC16 writes handled in cb_write_multiple_registers (go to the draft) */
+#endif
+    { 0x1400, 0x143F, true,  plc_mbm_ports_read,          NULL },   /* RS-485 port table (MBM-003); FC16 writes handled in cb_write_multiple_registers */
 #endif
 
     { 0x9000, 0x9000, true,  read_config_status,          NULL },
@@ -1403,6 +1549,19 @@ static nmbs_error cb_write_multiple_registers(uint16_t address, uint16_t quantit
      */
     if (address >= PLC_MBM_BASE && address < PLC_MBM_BASE + PLC_MBM_REGS) {
         return (plc_mbm_write((uint16_t)(address - PLC_MBM_BASE), quantity, registers)
+                                == PLC_MBM_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
+    }
+#if SPLC_MBW_ENABLE
+    /* MB_WRITE blocks (plc_mbw.h): same draft / COMMIT path; only a request that runs
+     * past 0x11FF is rejected (0x02). */
+    if (address >= PLC_MBW_BASE && address < PLC_MBW_BASE + PLC_MBW_REGS) {
+        return (plc_mbw_write((uint16_t)(address - PLC_MBW_BASE), quantity, registers)
+                == PLC_MBW_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
+    }
+#endif
+    /* RS-485 port table 0x1400..0x143F: same draft / COMMIT path as the blocks. */
+    if (address >= PLC_MBM_PORT_BASE && address < PLC_MBM_PORT_BASE + PLC_MBM_PORT_TABLE_REGS) {
+        return (plc_mbm_ports_write((uint16_t)(address - PLC_MBM_PORT_BASE), quantity, registers)
                 == PLC_MBM_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
     }
 #endif
@@ -1425,6 +1584,19 @@ static nmbs_error cb_write_multiple_registers(uint16_t address, uint16_t quantit
         address < PLC_MQTT_BROKER_BASE + PLC_MQTT_BROKER_REGS) {
         return (plc_mqtt_broker_write((uint16_t)(address - PLC_MQTT_BROKER_BASE), quantity, registers)
                 == PLC_MQTT_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
+    }
+#endif
+
+#if SPLC_MQTT_SUB_ENABLE
+    /*
+     * MQTT Subscribe blocks (plc_mqtt_sub.h): writes go to the draft and are checked
+     * at COMMIT, so a write inside the area always ACKs; only a request that runs
+     * past 0x0DFF is rejected (0x02). A request that starts below 0x0D80 and runs
+     * into the area starts in the telemetry area and is handled there.
+     */
+    if (address >= PLC_MQTT_SUB_BASE && address < PLC_MQTT_SUB_BASE + PLC_MQTT_SUB_REGS) {
+        return (plc_mqtt_sub_write((uint16_t)(address - PLC_MQTT_SUB_BASE), quantity, registers)
+                == PLC_MQTT_SUB_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
     }
 #endif
 
@@ -1604,6 +1776,58 @@ void plc_modbus_cfg_init(const modbus_transport_t *transport)
              (int)s_transport.kind, (unsigned)s_transport.unit_id);
 }
 
+#if SPLC_MODBUS_MAX_TRANSPORTS > 1
+bool plc_modbus_cfg_add_transport(const modbus_transport_t *transport)
+{
+    if (transport == NULL || transport->read == NULL || transport->write == NULL) {
+        log_error(TAG, "add_transport: NULL transport or read/write");
+        return false;
+    }
+    if (s_x_count >= EXTRA_TRANSPORTS) {
+        log_error(TAG, "add_transport: all %u extra slots used", (unsigned)EXTRA_TRANSPORTS);
+        return false;
+    }
+
+    const uint8_t i = s_x_count;
+    s_x_transport[i] = *transport;
+
+    nmbs_platform_conf platform_conf;
+    nmbs_platform_conf_create(&platform_conf);
+    platform_conf.transport = (nmbs_transport)s_x_transport[i].kind;
+    platform_conf.read      = s_x_transport[i].read;
+    platform_conf.write     = s_x_transport[i].write;
+    platform_conf.arg       = s_x_transport[i].ctx;
+
+    nmbs_callbacks callbacks;
+    nmbs_callbacks_create(&callbacks);
+    callbacks.read_holding_registers   = cb_read_holding_registers;
+    callbacks.write_multiple_registers = cb_write_multiple_registers;
+    callbacks.write_single_register    = cb_write_single_register;
+
+    nmbs_error err = nmbs_server_create(&s_x_nmbs[i], s_x_transport[i].unit_id,
+                                        &platform_conf, &callbacks);
+    if (err != NMBS_ERROR_NONE) {
+        log_error(TAG, "add_transport: nmbs_server_create failed: err=%d (%s) kind=%d unit_id=%u",
+                  (int)err, nmbs_strerror(err), (int)s_x_transport[i].kind,
+                  (unsigned)s_x_transport[i].unit_id);
+        return false;
+    }
+
+    /* Same timeout split as slot 0 (see plc_modbus_cfg_init()): never wait for a
+     * request that might not come, but finish one that has started. */
+    nmbs_set_read_timeout(&s_x_nmbs[i], 0);
+    nmbs_set_byte_timeout(&s_x_nmbs[i], MODBUS_BYTE_TIMEOUT_MS);
+
+    if (s_x_transport[i].kind == MODBUS_TRANSPORT_KIND_TCP) {
+        s_x_tcp = true;
+    }
+    s_x_count++;
+    log_info(TAG, "add_transport OK: slot %u kind=%d", (unsigned)(i + 1U),
+             (int)s_x_transport[i].kind);
+    return true;
+}
+#endif
+
 void modbus_config_service(void)
 {
     /* Still pump the transport (e.g. tud_task() for USB-CDC) even if the
@@ -1613,11 +1837,22 @@ void modbus_config_service(void)
         s_transport.process(s_transport.ctx);
     }
 
-    if (!s_initialized) {
-        return;   /* s_nmbs is all-zero; polling it would jump to NULL. */
+    if (s_initialized) {
+        nmbs_server_poll(&s_nmbs);   /* else s_nmbs is all-zero; polling it would jump to NULL. */
     }
 
-    nmbs_server_poll(&s_nmbs);
+#if SPLC_MODBUS_MAX_TRANSPORTS > 1
+    /* Extra transports: only fully created slots are ever counted in s_x_count.
+     * One complete request per transport per scan at most; they run one after the
+     * other on the engine context, so the shared draft/COMMIT state never sees
+     * two requests at once. */
+    for (uint8_t i = 0U; i < s_x_count; i++) {
+        if (s_x_transport[i].process != NULL) {
+            s_x_transport[i].process(s_x_transport[i].ctx);
+        }
+        nmbs_server_poll(&s_x_nmbs[i]);
+    }
+#endif
 }
 
 void plc_modbus_cfg_record_scan_time(uint32_t scan_time_ms)
