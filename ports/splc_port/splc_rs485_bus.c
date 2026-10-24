@@ -63,6 +63,7 @@ typedef struct {
     uint32_t hold_limit_ms;    /* how long a transaction may wait for its first byte */
     uint32_t last_check;
     bool     checked_once;
+    uint32_t recover_next_ms;  /* earliest next attempt to bring a dead UART back (see ensure_owned) */
 } bus_t;
 
 static bus_t s_bus[BUS_PORTS];
@@ -89,6 +90,31 @@ static bool ensure_owned(uint8_t hp, bus_t *b)
         }
         if (problem == 0 && st.owner != RS485_OWNER_MODBUS_GATEWAY) {
             problem = 1;
+        }
+        /* The host driver never leaves STOPPED / DISABLED / ERROR by itself: only
+         * rs485_port_reconfigure() makes a port RUNNING, and a failed HAL_UART_Init() (e.g. a
+         * host service config with baud 0) parks it in ERROR for good. apply_line() is only
+         * reached once this function says "ready", so without a way out here a port in one of
+         * those states stays dead (no frame ever leaves it). Try to start it with a safe line
+         * (the I/O boards' line, else 9600 8N1); apply_line() moves it to the wanted settings
+         * on first use. Rate-limited: a reconfigure can take up to ~100 ms. */
+        if (problem == 0 && st.state != RS485_STATE_RUNNING && st.state != RS485_STATE_RECONFIGURING) {
+            const uint32_t t = now_ms();
+            if ((int32_t)(t - b->recover_next_ms) >= 0) {
+                b->recover_next_ms = t + 2000U;
+                const line_t want = b->has_io ? b->io_line
+                                              : (line_t){ .baud = 9600U, .data_bits = 8U, .parity = 0U, .stop_bits = 1U };
+                const rs485_runtime_config_t cfg = { .baudrate = want.baud, .data_bits = want.data_bits,
+                                                     .parity = want.parity, .stop_bits = want.stop_bits };
+                const int rc = rs485_port_reconfigure(hp, &cfg);
+                log_warn(TAG, "RS485 port %d was in driver state %d (not RUNNING): start at %lu baud %s",
+                         (int)hp, (int)st.state, (unsigned long)want.baud, (rc == 0) ? "OK" : "FAILED");
+                if (rc == 0) {
+                    b->applied = want;
+                    b->applied_valid = true;
+                    st.state = RS485_STATE_RUNNING;
+                }
+            }
         }
         if (problem == 0 && st.state != RS485_STATE_RUNNING) {
             b->applied_valid = false;       /* the next apply must re-initialise */
@@ -210,6 +236,27 @@ void splc_bus_io_port(modbus_serial_port_t *out)
 
 #if SPLC_MBM_ENABLE
 
+/* Diagnostic counters for MB_READ/MB_WRITE ports (log only, no behaviour change). Set to 0 to
+ * remove every trace line and counter once the port works. */
+#ifndef SPLC_BUS_MBM_TRACE
+#define SPLC_BUS_MBM_TRACE 1
+#endif
+
+#if SPLC_BUS_MBM_TRACE
+typedef struct {
+    uint32_t write_start;        /* frames handed over by the master */
+    uint32_t write_start_busy;   /* ... refused because one was still pending */
+    uint32_t td_calls;           /* tx_done() calls while a frame was pending */
+    uint32_t td_own_fail;        /* ensure_owned() false */
+    uint32_t td_bus_busy;        /* shared bus held by the I/O boards */
+    uint32_t td_line_fail;       /* apply_line() false */
+    uint32_t sent_ok;            /* rs485_send() == len */
+    uint32_t sent_fail;          /* rs485_send() != len */
+    uint32_t aborts;             /* write_abort() with a frame still pending */
+    uint32_t configure;          /* mbm_configure() calls */
+} mbm_trace_t;
+#endif
+
 typedef struct {
     uint8_t        app_idx;      /* 0..2 = App port 1..3 */
     uint8_t        host_port;
@@ -217,6 +264,9 @@ typedef struct {
     const uint8_t *tx;           /* frame handed over by write_start(), valid until tx_done() */
     uint16_t       tx_len;
     bool           pending;      /* a frame waits for the bus */
+#if SPLC_BUS_MBM_TRACE
+    mbm_trace_t    tr;
+#endif
 } mbm_port_t;
 
 static mbm_port_t s_mbm[MBM_APP_PORTS];
@@ -243,6 +293,14 @@ static int mbm_read_cb(void *ctx, uint8_t *buf, uint16_t max_len)
 static int mbm_write_start(void *ctx, const uint8_t *buf, uint16_t len)
 {
     mbm_port_t *p = (mbm_port_t *)ctx;
+#if SPLC_BUS_MBM_TRACE
+    if (p->tr.write_start < 4U) {
+        log_info(TAG, "[trace] App port %u: write_start len=%u pending=%d (call %lu)",
+                 (unsigned)p->app_idx + 1U, (unsigned)len, (int)p->pending,
+                 (unsigned long)p->tr.write_start + 1U);
+    }
+    if (p->pending) { p->tr.write_start_busy++; } else { p->tr.write_start++; }
+#endif
     if (p->pending || len == 0U) {
         return -1;
     }
@@ -261,23 +319,50 @@ static bool mbm_tx_done(void *ctx)
     if (!p->pending) {
         return true;
     }
+#if SPLC_BUS_MBM_TRACE
+    p->tr.td_calls++;
+#endif
     if (!ensure_owned(p->host_port, b)) {
+#if SPLC_BUS_MBM_TRACE
+        p->tr.td_own_fail++;
+#endif
         return false;
     }
     if (SHARED(b)) {
         bus_release_if_done(b, now);
         if (b->owner != OWN_FREE) {
+#if SPLC_BUS_MBM_TRACE
+            p->tr.td_bus_busy++;
+#endif
             return false;                /* the I/O boards (or a previous exchange) hold it */
         }
     }
     if (!apply_line(p->host_port, b, &p->desired)) {
+#if SPLC_BUS_MBM_TRACE
+        p->tr.td_line_fail++;
+#endif
         return false;
     }
     rs485_flush(p->host_port);
     if (SHARED(b)) {
         b->owner = OWN_MBM;
     }
+#if SPLC_BUS_MBM_TRACE
+    const int32_t sent = rs485_send(p->host_port, p->tx, p->tx_len);   /* blocks for this one frame (TC) */
+    if (sent == (int32_t)p->tx_len) { p->tr.sent_ok++; } else { p->tr.sent_fail++; }
+    if (p->tr.sent_ok + p->tr.sent_fail <= 4U) {
+        rs485_port_status_t st;
+        (void)rs485_port_get_status(p->host_port, &st);
+        log_info(TAG, "[trace] App port %u (host %u): rs485_send(%u B) = %ld, state=%d owner=%d "
+                      "line=%lu/%u/%u/%u tx_frames=%lu",
+                 (unsigned)p->app_idx + 1U, (unsigned)p->host_port, (unsigned)p->tx_len, (long)sent,
+                 (int)st.state, (int)st.owner, (unsigned long)b->applied.baud,
+                 (unsigned)b->applied.data_bits, (unsigned)b->applied.parity,
+                 (unsigned)b->applied.stop_bits, (unsigned long)st.counters.tx_frames);
+    }
+#else
     (void)rs485_send(p->host_port, p->tx, p->tx_len);   /* blocks for this one frame (TC) */
+#endif
     b->rx_seen = false;
     b->hold_since = now_ms();
     b->hold_limit_ms = SPLC_HOST_BUS_MBM_HOLD_MS;
@@ -287,6 +372,9 @@ static bool mbm_tx_done(void *ctx)
 
 static void mbm_write_abort(void *ctx)
 {
+#if SPLC_BUS_MBM_TRACE
+    if (((mbm_port_t *)ctx)->pending) { ((mbm_port_t *)ctx)->tr.aborts++; }
+#endif
     ((mbm_port_t *)ctx)->pending = false;
 }
 
@@ -297,6 +385,12 @@ static int mbm_configure(void *ctx, const plc_mbm_serial_t *c)
 {
     mbm_port_t *p = (mbm_port_t *)ctx;
     line_t l;
+#if SPLC_BUS_MBM_TRACE
+    p->tr.configure++;
+    log_info(TAG, "[trace] App port %u: configure(baud=%lu data=%u parity=%u stop=%u)",
+             (unsigned)p->app_idx + 1U, (unsigned long)c->baud, (unsigned)c->data_bits,
+             (unsigned)c->parity, (unsigned)c->stop_bits);
+#endif
     l.baud = c->baud;
     l.stop_bits = (c->stop_bits == 2U) ? 2U : 1U;
     switch (c->parity) {
@@ -383,8 +477,52 @@ void splc_bus_init(void)
 #endif
 }
 
+#if SPLC_BUS_MBM_TRACE && SPLC_MBM_ENABLE
+/* One line per MB_READ/MB_WRITE port every 5 s while its counters move (and the first 3 times
+ * regardless, so a port that never does anything is still visible). */
+static void mbm_trace_stats(uint32_t now)
+{
+    static uint32_t last_ms;
+    static uint8_t  quiet_logged[MBM_APP_PORTS];
+    static uint32_t prev_sum[MBM_APP_PORTS];
+    if ((uint32_t)(now - last_ms) < 5000U) {
+        return;
+    }
+    last_ms = now;
+    for (unsigned i = 0U; i < MBM_APP_PORTS; i++) {
+        const mbm_port_t *p = &s_mbm[i];
+        if (s_bus[p->host_port].mbm_idx != (int8_t)i || s_bus[p->host_port].has_mbm == false) {
+            continue;
+        }
+        const mbm_trace_t *t = &p->tr;
+        const uint32_t sum = t->write_start + t->td_calls + t->sent_ok + t->sent_fail + t->configure;
+        if (sum == prev_sum[i] && quiet_logged[i] >= 3U) {
+            continue;
+        }
+        if (sum == prev_sum[i]) { quiet_logged[i]++; }
+        prev_sum[i] = sum;
+        rs485_port_status_t st;
+        (void)rs485_port_get_status(p->host_port, &st);
+        log_info(TAG, "[trace] App port %u (host %u): ws=%lu ws_busy=%lu td=%lu own_fail=%lu busy=%lu "
+                      "line_fail=%lu sent_ok=%lu sent_fail=%lu abort=%lu cfg=%lu pending=%d | "
+                      "drv state=%d owner=%d tx_frames=%lu rx_bytes=%lu timeouts=%lu",
+                 i + 1U, (unsigned)p->host_port,
+                 (unsigned long)t->write_start, (unsigned long)t->write_start_busy,
+                 (unsigned long)t->td_calls, (unsigned long)t->td_own_fail,
+                 (unsigned long)t->td_bus_busy, (unsigned long)t->td_line_fail,
+                 (unsigned long)t->sent_ok, (unsigned long)t->sent_fail,
+                 (unsigned long)t->aborts, (unsigned long)t->configure, (int)p->pending,
+                 (int)st.state, (int)st.owner, (unsigned long)st.counters.tx_frames,
+                 (unsigned long)st.counters.rx_bytes, (unsigned long)st.counters.timeouts);
+    }
+}
+#endif
+
 void splc_bus_poll(uint32_t now)
 {
+#if SPLC_BUS_MBM_TRACE && SPLC_MBM_ENABLE
+    mbm_trace_stats(now);
+#endif
     for (unsigned h = 0U; h < BUS_PORTS; h++) {
         bus_t *b = &s_bus[h];
         if (!b->has_io && !b->has_mbm) {
