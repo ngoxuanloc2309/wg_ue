@@ -224,7 +224,8 @@
  * staged with the Deploy, saved in the Flash Rule Table record as flag bit 11)
  * AND the float Rule Engine (step R2): the rule record's `flags` byte (wire
  * register 13, high byte) is carried over the wire / CRC / Flash / RAM, and a rule
- * with SPLC_RULE_FLAG_FLOAT_DATA compares float32 and scales in float32.
+ * with SPLC_RULE_FLAG_TRIGGER_FLOAT compares float32, and one with both float
+ * flags (0x03) scales in float32 (handoff decision 55).
  * 0 = nothing changes: no table, no Flash flag, no rule flags byte, the exact
  * baseline binary (byte-identical, checked with md5 of the .bin). */
 #ifndef SPLC_REAL_ENABLE
@@ -284,6 +285,15 @@
  * changes: no code, no RAM, the exact baseline binary. */
 #ifndef SPLC_WIFI_ENABLE
 #define SPLC_WIFI_ENABLE                 0
+#endif
+
+/* 1 = build the MQTT TLS certificate block 0x0F00..0x0F43 (plc_mqtt_tls.h, ICD MQTT-003):
+ * the App sends the Root CA / client certificate / client key in chunks, SimplePLC checks
+ * every chunk and hands it straight to the host (splc_mqtt_tls_register()); the host stores
+ * it and loads it into its TLS stack. SimplePLC buffers no certificate and owns no TLS.
+ * Needs SPLC_MQTT_ENABLE = 1. 0 = nothing changes: no code, no RAM. */
+#ifndef SPLC_MQTT_TLS_CERT_ENABLE
+#define SPLC_MQTT_TLS_CERT_ENABLE        0
 #endif
 
 /* Number of App-link transports the Modbus config server can serve at once (1..3).
@@ -420,6 +430,12 @@
 #endif
 #if (SPLC_WIFI_ENABLE != 0) && (SPLC_WIFI_ENABLE != 1)
 #error "SPLC_WIFI_ENABLE must be 0 or 1"
+#endif
+#if (SPLC_MQTT_TLS_CERT_ENABLE != 0) && (SPLC_MQTT_TLS_CERT_ENABLE != 1)
+#error "SPLC_MQTT_TLS_CERT_ENABLE must be 0 or 1"
+#endif
+#if SPLC_MQTT_TLS_CERT_ENABLE && !SPLC_MQTT_ENABLE
+#error "SPLC_MQTT_TLS_CERT_ENABLE needs SPLC_MQTT_ENABLE = 1 (the certificates are for the MQTT broker connection)"
 #endif
 #if (SPLC_MBW_ENABLE != 0) && (SPLC_MBW_ENABLE != 1)
 #error "SPLC_MBW_ENABLE must be 0 or 1"

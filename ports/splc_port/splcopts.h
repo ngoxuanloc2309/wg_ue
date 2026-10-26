@@ -71,13 +71,18 @@
 /* Wi-Fi settings from the App: ports/splc_port/splc_wifi_port.c. */
 #define SPLC_WIFI_ENABLE       1
 
-/* App link over LAN (Modbus TCP) - implemented in ports/splc_port/splc_modbus_tcp_port.c
- * but currently OFF: rules are deployed over USB CDC. With both lines below at their
- * values here the binary is identical to a build without the TCP code.
- * To turn it on set SPLC_MODBUS_MAX_TRANSPORTS 2 and SPLC_HOST_MODBUS_TCP_ENABLE 1.
- * It listens on port 5020 (apps/modbus_tcp_server owns 502), costs about 392 B RAM
- * (only 2 992 B of static RAM are left, handoff decision 26: measure the host map),
- * and has no authentication: set SPLC_HOST_MODBUS_TCP_ALLOW_NET/_MASK to limit clients. */
-#define SPLC_MODBUS_MAX_TRANSPORTS      1
-#define SPLC_HOST_MODBUS_TCP_ENABLE     0
+/* App link over LAN (Modbus TCP) - implemented in ports/splc_port/splc_modbus_tcp_port.c.
+ * ON: the App (or a test script) can also talk to the gateway over the network, next to the
+ * existing link. It listens on SPLC_HOST_MODBUS_TCP_PORT (apps/modbus_tcp_server owns 502, so
+ * the default is 5020), costs about 392 B RAM per extra transport (only ~3 KB of static RAM
+ * are left, handoff decision 26: check the link still passes) and has NO authentication:
+ * limit the clients with SPLC_HOST_MODBUS_TCP_ALLOW_NET/_MASK (e.g. 192.168.1.0 / 255.255.255.0)
+ * or turn it off again after the test.
+ * OFF (previous state): MAX_TRANSPORTS 1 and TCP_ENABLE 0 give a binary identical to a build
+ * without the TCP code. */
+#define SPLC_MODBUS_MAX_TRANSPORTS      2
+#define SPLC_HOST_MODBUS_TCP_ENABLE     1
+#define SPLC_HOST_MODBUS_TCP_PORT       5020      /* 1..65535, must not be 502 */
+/* #define SPLC_HOST_MODBUS_TCP_ALLOW_NET   0xC0A80100UL   192.168.1.0  (0 = any client) */
+/* #define SPLC_HOST_MODBUS_TCP_ALLOW_MASK  0xFFFFFF00UL   255.255.255.0 */
 #endif /* SPLCOPTS_H */
