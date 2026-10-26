@@ -85,4 +85,8 @@
 #define SPLC_HOST_MODBUS_TCP_PORT       5020      /* 1..65535, must not be 502 */
 /* #define SPLC_HOST_MODBUS_TCP_ALLOW_NET   0xC0A80100UL   192.168.1.0  (0 = any client) */
 /* #define SPLC_HOST_MODBUS_TCP_ALLOW_MASK  0xFFFFFF00UL   255.255.255.0 */
+
+/*ON TLS*/
+#define SPLC_MQTT_TLS_CERT_ENABLE       1
+
 #endif /* SPLCOPTS_H */

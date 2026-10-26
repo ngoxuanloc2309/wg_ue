@@ -26,7 +26,8 @@ target_sources(ports_splc_port PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_modbus_tcp_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_rs485_bus.c
     ${CMAKE_CURRENT_SOURCE_DIR}/splc_wifi_port.c
-       ${CMAKE_CURRENT_SOURCE_DIR}/gw_rs485_diag.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/splc_mqtt_tls_port.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/gw_rs485_diag.c
 )
 # CDC-only USB device: this port owns the USB peripheral (GW_USB_CDC_ENABLE).
 if(GW_USB_CDC_ENABLE)

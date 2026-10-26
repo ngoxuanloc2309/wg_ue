@@ -60,6 +60,22 @@ int file_io_mkdir(const char *path);
  */
 int file_io_rename(const char *oldpath, const char *newpath);
 
+/**
+ * @brief Append data to a file (creates it if it does not exist)
+ * @param path: Path to the file
+ * @param data: Data to append
+ * @param len: Length of data to append
+ * @return Number of bytes appended on success, negative error code on failure
+ */
+int file_io_append(const char *path, const void *data, size_t len);
+ 
+/**
+ * @brief Remove a file or an empty directory
+ * @param path: Path to remove
+ * @return 0 on success (also when it does not exist), negative error code on failure
+ */
+int file_io_remove(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

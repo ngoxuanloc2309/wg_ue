@@ -25,6 +25,7 @@
 #include "board_ethernet_wifi_gateway.h"
 #include "splc_log.h"
 #include "gw_rs485_diag.h"
+#include "splc_mqtt_tls_port.h"
 
 #if GW_USB_CDC_ENABLE
 #include "gw_usb_cdc.h"
@@ -303,6 +304,8 @@ static void splc_task(void *arg)
     /* Extra App link over LAN (Modbus TCP). Must follow plc_engine_init(): the library
      * contract for plc_modbus_cfg_add_transport(). No-op unless
      * SPLC_HOST_MODBUS_TCP_ENABLE; a failure is logged and USB/RS485 keep working. */
+
+    splc_mqtt_tls_port_init();
     (void)splc_modbus_tcp_port_start();
 
     for (;;) {
