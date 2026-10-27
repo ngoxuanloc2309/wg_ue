@@ -45,6 +45,11 @@ static uint32_t s_last_reconnect_ms;
 static bool     s_warned_gen_valid;
 static uint32_t s_warned_gen;
 #if SPLC_MQTT_SUB_ENABLE
+/* 1 = log every received SUB message and a counter summary (see sub_diag_poll). Cheap, INFO level. */
+#ifndef SPLC_HOST_MQTT_SUB_DIAG
+#define SPLC_HOST_MQTT_SUB_DIAG 1
+#endif
+#define SUB_DIAG_PERIOD_MS 5000U
 static bool     s_sub_pushed;
 static uint32_t s_sub_pushed_gen;
 #endif
@@ -117,9 +122,46 @@ static void sub_drain_messages(void)
     mqtt_client_rx_t m;
     /* A few per call: the queue is small and the library applies one message per call anyway. */
     for (unsigned n = 0U; n < 4U && mqtt_client_sub_poll(&m); n++) {
-        (void)splc_mqtt_input(m.topic, (const char *)m.payload, m.len, false);
+        const bool matched = splc_mqtt_input(m.topic, (const char *)m.payload, m.len, false);
+#if SPLC_HOST_MQTT_SUB_DIAG
+        log_info(TAG, "SUB rx: topic=%s len=%u matched=%d", m.topic, (unsigned)m.len, matched ? 1 : 0);
+#else
+        (void)matched;
+#endif
     }
 }
+
+#if SPLC_HOST_MQTT_SUB_DIAG
+/* Diagnostics: one line when a counter moved, at most every SUB_DIAG_PERIOD_MS.
+ * rx/applied/rejected/dropped come from the library (plc_mqtt_sub); host_drop = messages the
+ * host client threw away before the library saw them (queue full or longer than 128 B). */
+static void sub_diag_poll(uint32_t now_ms)
+{
+    static bool     have;
+    static uint32_t last_ms;
+    static uint32_t l_rx, l_ap, l_rj, l_dr, l_hd;
+
+    if (have && (uint32_t)(now_ms - last_ms) < SUB_DIAG_PERIOD_MS) return;
+    have = true;
+    last_ms = now_ms;
+
+    splc_mqtt_sub_stats_t st;
+    splc_mqtt_sub_get_stats(&st);
+    const uint32_t hd = mqtt_client_sub_dropped();
+    if (st.received == l_rx && st.applied == l_ap && st.rejected == l_rj &&
+        st.dropped == l_dr && hd == l_hd) {
+        return;
+    }
+    l_rx = st.received; l_ap = st.applied; l_rj = st.rejected; l_dr = st.dropped; l_hd = hd;
+    log_info(TAG, "SUB stats: rx=%lu applied=%lu rejected=%lu dropped=%lu host_drop=%lu",
+             (unsigned long)st.received, (unsigned long)st.applied, (unsigned long)st.rejected,
+             (unsigned long)st.dropped, (unsigned long)hd);
+    if (st.rejected != 0U && st.applied == 0U) {
+        log_warn(TAG, "SUB: messages arrive but none is applied -> a pin's field name is not in the payload "
+                      "(nested field needs the full path, e.g. values.log) or its value is not a number");
+    }
+}
+#endif /* SPLC_HOST_MQTT_SUB_DIAG */
 #endif /* SPLC_MQTT_SUB_ENABLE */
 
 /* ---- public -------------------------------------------------------------- */
@@ -145,6 +187,9 @@ void splc_mqtt_port_poll(uint32_t now_ms)
 {
 #if SPLC_MQTT_SUB_ENABLE
     sub_drain_messages();                /* cheap: one queue peek when nothing arrived */
+#if SPLC_HOST_MQTT_SUB_DIAG
+    sub_diag_poll(now_ms);
+#endif
 #endif
     if (s_have_pump && (uint32_t)(now_ms - s_last_pump_ms) < PUMP_PERIOD_MS) return;
     s_have_pump = true;
