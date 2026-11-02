@@ -53,6 +53,7 @@
 /* #define SPLC_WIFI_ENABLE              0 */      /* 1 = Wi-Fi block 0x1300..0x13FF through host callbacks (splc_wifi_register()); 0 = no change at all */
 /* #define SPLC_MQTT_TLS_CERT_ENABLE     0 */      /* 1 = TLS certificate block 0x0F00..0x0F43 through host callbacks (splc_mqtt_tls_register(); needs SPLC_MQTT_ENABLE 1); 0 = no change at all */
 /* #define SPLC_MBW_ENABLE               0 */      /* 1 = MB_WRITE blocks 0x1100..0x11FF (needs SPLC_MBM_ENABLE 1); 0 = no change at all */
+/* #define SPLC_MODBUS_SLAVE_ENABLE      0 */      /* 1 = serve the fixed Modbus Slave map (plc_mbs.h) on RS-485 ports the App set to Slave, and declare capability 0x4000 (needs SPLC_MBM_ENABLE 1); 0 = no change at all */
 /* #define SPLC_MBM_PORT_COUNT           1 */      /* 1..4 RS-485 ports for MB_READ/MB_WRITE (reported at 0x0A0A); the host registers one UART per port with splc_mbm_set_rs485_port(); line settings come from the App (0x1400) */
 
 /* --- MQTT Subscribe ----------------------------------------------------- */
@@ -72,6 +73,8 @@
 /* --- Logging --------------------------------------------------------- */
 /* #define SPLC_RTC_BUILTIN              1 */      /* 0 = host supplies sx_rtc_*() (no CubeMX RTC needed) */
 /* #define SPLC_ADC_BUILTIN              1 */      /* 0 = host supplies sx_adc_*() (no CubeMX ADC needed) */
+/* #define SPLC_RTC_EXTERNAL             0 */      /* 1 = external RTC chip: register get/set hooks with plc_rtc_register() (implies SPLC_RTC_BUILTIN 0) */
+/* #define SPLC_RTC_EXT_READ_PERIOD_MS   1000U */  /* 100..60000: how often the registered hooks are called */
 /* #define SPLC_LOG_LEVEL                4 */      /* 0 OFF .. 4 DEBUG */
 /* #define SPLC_LOG_BUFFER_SIZE          4096 */
 

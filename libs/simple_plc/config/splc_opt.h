@@ -47,6 +47,7 @@
 #define SPLC_BOARD_REMOTE_IO_8DI_8DO     2
 #define SPLC_BOARD_DATALOGGER            3
 #define SPLC_BOARD_GATEWAY               4
+#define SPLC_BOARD_WIFI_IO               5
 
 /* ======================================================================
  * Target
@@ -279,6 +280,15 @@
 #define SPLC_MBW_ENABLE                  0
 #endif
 
+/* 1 = build the Modbus SLAVE serving module (plc_mbs.h, SPLC-SPEC-SLAVE-001): an RS-485 port
+ * the App set to the Slave role (0x1400 +14) answers a SCADA master with FC01/02/03/05/06/15/16
+ * over the fixed tag map, and the build declares capability MODBUS_SLAVE (0x4000) at 0x0A08.
+ * Needs SPLC_MBM_ENABLE = 1 (it shares the port table and the host's UART binding). 0 = nothing
+ * changes: no code, the exact baseline binary. */
+#ifndef SPLC_MODBUS_SLAVE_ENABLE
+#define SPLC_MODBUS_SLAVE_ENABLE         0
+#endif
+
 /* 1 = build the Wi-Fi block 0x1300..0x13FF (plc_wifi.h, ICD WIFI-004): the App scans,
  * connects and configures the host's Wi-Fi through a small set of host callbacks
  * (splc_wifi_register()). SimplePLC owns no radio and no Flash for it. 0 = nothing
@@ -358,6 +368,31 @@
 #define SPLC_ADC_BUILTIN                 1
 #endif
 
+/* --- External RTC (registered hooks) ----------------------------------
+ * 0 (default) = the clock is the Layer 1 contract sx_rtc_*() (built-in STM32H5
+ *               RTC, or the host's own sx_rtc_*() when SPLC_RTC_BUILTIN = 0).
+ * 1           = the clock is an EXTERNAL chip (I2C/SPI RTC) that the product
+ *               owns. SimplePLC has no driver for it: the product registers
+ *               two functions (get / set the UTC epoch, optionally "is the
+ *               time valid") with plc_rtc_register() (services/plc_rtc/
+ *               plc_rtc.h) before plc_engine_init(). Implies SPLC_RTC_BUILTIN 0
+ *               (no STM32 RTC driver, no HAL_RTC_Set* wrap) -- you do not have
+ *               to set it yourself. Same style as splc_link_register().
+ * SPLC_RTC_EXT_READ_PERIOD_MS: the registered get/is_synced hooks are called
+ *               at most this often (the time in between is counted from the
+ *               system tick), so a slow bus never stalls the 10 ms scan.
+ */
+#ifndef SPLC_RTC_EXTERNAL
+#define SPLC_RTC_EXTERNAL                0
+#endif
+#ifndef SPLC_RTC_EXT_READ_PERIOD_MS
+#define SPLC_RTC_EXT_READ_PERIOD_MS      1000U
+#endif
+#if SPLC_RTC_EXTERNAL
+#undef  SPLC_RTC_BUILTIN
+#define SPLC_RTC_BUILTIN                 0
+#endif
+
 /* Initial log level: 0 OFF, 1 ERROR, 2 WARNING, 3 INFO, 4 DEBUG. */
 #ifndef SPLC_LOG_LEVEL
 #define SPLC_LOG_LEVEL                   4
@@ -383,7 +418,7 @@
 #if (SPLC_PLATFORM < SPLC_PLATFORM_STM32H5) || (SPLC_PLATFORM > SPLC_PLATFORM_ESP32)
 #error "SPLC_PLATFORM must be one of the SPLC_PLATFORM_* selectors"
 #endif
-#if (SPLC_BOARD < SPLC_BOARD_ZIGBEE_IO_4DI_4DO) || (SPLC_BOARD > SPLC_BOARD_GATEWAY)
+#if (SPLC_BOARD < SPLC_BOARD_ZIGBEE_IO_4DI_4DO) || (SPLC_BOARD > SPLC_BOARD_WIFI_IO)
 #error "SPLC_BOARD must be one of the SPLC_BOARD_* selectors"
 #endif
 #if (SPLC_FLASH_SIZE_KB < 16)
@@ -443,6 +478,12 @@
 #if SPLC_MBW_ENABLE && !SPLC_MBM_ENABLE
 #error "SPLC_MBW_ENABLE = 1 needs SPLC_MBM_ENABLE = 1 (MB_WRITE shares the RS-485 ports of the Modbus master)"
 #endif
+#if (SPLC_MODBUS_SLAVE_ENABLE != 0) && (SPLC_MODBUS_SLAVE_ENABLE != 1)
+#error "SPLC_MODBUS_SLAVE_ENABLE must be 0 or 1"
+#endif
+#if SPLC_MODBUS_SLAVE_ENABLE && !SPLC_MBM_ENABLE
+#error "SPLC_MODBUS_SLAVE_ENABLE = 1 needs SPLC_MBM_ENABLE = 1 (the Slave module uses the RS-485 ports and port table of the Modbus master)"
+#endif
 #if (SPLC_REAL_ENABLE != 0) && (SPLC_REAL_ENABLE != 1)
 #error "SPLC_REAL_ENABLE must be 0 or 1"
 #endif
@@ -472,6 +513,12 @@
 #endif
 #if (SPLC_RTC_BUILTIN != 0) && (SPLC_RTC_BUILTIN != 1)
 #error "SPLC_RTC_BUILTIN must be 0 or 1"
+#endif
+#if (SPLC_RTC_EXTERNAL != 0) && (SPLC_RTC_EXTERNAL != 1)
+#error "SPLC_RTC_EXTERNAL must be 0 or 1"
+#endif
+#if (SPLC_RTC_EXT_READ_PERIOD_MS < 100U) || (SPLC_RTC_EXT_READ_PERIOD_MS > 60000U)
+#error "SPLC_RTC_EXT_READ_PERIOD_MS must be 100..60000"
 #endif
 #if (SPLC_ADC_BUILTIN != 0) && (SPLC_ADC_BUILTIN != 1)
 #error "SPLC_ADC_BUILTIN must be 0 or 1"
